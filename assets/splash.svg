@@ -1,0 +1,17 @@
+<svg width="2048" height="2048" viewBox="0 0 2048 2048" xmlns="http://www.w3.org/2000/svg">
+  <!-- White background -->
+  <rect width="2048" height="2048" fill="white"/>
+  
+  <!-- Yarkib Logo -->
+  <g transform="translate(1024, 1024)">
+    <!-- Y letter -->
+    <path d="M -200 -400 L -100 -200 L 0 -400 L 100 -200 L 200 -400 L 150 -400 L 50 -280 L -50 -280 L -150 -400 Z" fill="black"/>
+    
+    <!-- Bike wheel accent -->
+    <circle cx="0" cy="200" r="160" fill="none" stroke="black" stroke-width="16" opacity="0.3"/>
+    <circle cx="0" cy="200" r="80" fill="black" opacity="0.5"/>
+    
+    <!-- App name -->
+    <text x="0" y="400" text-anchor="middle" font-family="Arial, sans-serif" font-size="120" font-weight="bold" fill="black">Yarkib</text>
+  </g>
+</svg>

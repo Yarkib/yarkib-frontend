@@ -1,0 +1,351 @@
+# YARKIB PROJECT - COMPLETE CONTEXT DOCUMENT
+
+## PROJECT OVERVIEW
+Yarkib is a React Native/Expo mobile application for cyclists and route planning. It's built using Expo Router v5, React Native 0.79.6, and React 19.0.0. The app allows users to discover, save, and complete cycling routes with features like elevation profiles, OAuth authentication, and route management.
+
+## PROJECT STRUCTURE
+
+### Root Directory: `/yarkib/`
+- **Main entry point**: `app/_layout.tsx` (Expo Router root layout)
+- **Package management**: `package.json`, `package-lock.json`
+- **TypeScript config**: `tsconfig.json`
+- **Babel config**: `babel.config.js`
+- **ESLint config**: `eslint.config.js`
+
+### App Directory (`/yarkib/app/`)
+- **Root layout**: `_layout.tsx` - Main app wrapper with AuthProvider and navigation setup
+- **Tab navigation**: `(tabs)/_layout.tsx` - Bottom tab navigation structure
+- **Screens**:
+  - `index.tsx` - Welcome/landing screen
+  - `login.tsx` - User login screen
+  - `signup.tsx` - User registration screen
+  - `complete-signup.tsx` - Post-registration completion
+  - `home.tsx` - Main home screen
+  - `profile.tsx` - User profile screen
+  - `route-details.tsx` - Detailed route view with elevation charts
+  - `explore.tsx` - Route exploration screen
+  - `+not-found.tsx` - 404 error screen
+
+### Source Directory (`/yarkib/src/`)
+- **Components** (`/src/components/`):
+  - `AuthButton.js` - OAuth authentication buttons
+  - `ElevationChart.tsx` - Route elevation visualization
+  - `LoadingScreen.js` - Loading states
+  - `OAuthWebView.tsx` - OAuth web view wrapper
+  - `RiderCard.js` - User profile cards
+  - `RouteCard.tsx` - Route display cards
+  - `RouteElevationChart.tsx` - Enhanced elevation charts
+
+- **Configuration** (`/src/config/`):
+  - `config.js` - Centralized app configuration
+  - `oauth.js` - OAuth provider configurations
+
+- **Context** (`/src/context/`):
+  - `AuthContext.js` - Authentication state management
+
+- **Navigation** (`/src/navigation/`):
+  - `AppNavigator.js` - Navigation logic
+
+- **Screens** (`/src/screens/`):
+  - `HomeScreen.js` - Home screen implementation
+  - `LoginScreen.js` - Login screen implementation
+  - `ProfileScreen.js` - Profile screen implementation
+  - `SignupScreen.js` - Signup screen implementation
+  - `WelcomeScreen.js` - Welcome screen implementation
+
+- **Theme** (`/src/theme/`):
+  - `index.ts` - Theme configuration
+
+- **Types** (`/src/types/`):
+  - `auth.ts` - Authentication type definitions
+  - `route.ts` - Route data type definitions
+
+- **Utils** (`/src/utils/`):
+  - `api.js` - API client and mock data
+
+### Assets (`/yarkib/assets/`)
+- **Fonts**: `SpaceMono-Regular.ttf`
+- **Images**: Various app icons and splash screens
+- **Illustrations**: Welcome screen graphics
+
+## TECHNICAL STACK DETAILS
+
+### Core Dependencies
+- **React**: 19.0.0 (Latest major version)
+- **React Native**: 0.79.6 (Latest stable)
+- **Expo**: ~53.0.22 (SDK 53)
+- **Expo Router**: ~5.1.5 (File-based routing)
+
+### Key Libraries
+- **Navigation**: `@react-navigation/*` packages for navigation
+- **Authentication**: `expo-auth-session`, `expo-web-browser` for OAuth
+- **Storage**: `expo-secure-store` for secure data storage
+- **UI Components**: `@expo/vector-icons` (Ionicons), `expo-blur`, `expo-haptics`
+- **Charts**: `react-native-svg` for elevation charts
+- **Environment**: `react-native-dotenv` for environment variables
+
+### Development Tools
+- **TypeScript**: ~5.8.3 with strict mode enabled
+- **ESLint**: ^9.25.0 with Expo configuration
+- **Babel**: ^7.25.2 for JavaScript compilation
+
+## AUTHENTICATION SYSTEM
+
+### OAuth Providers
+- **Google**: Uses web client ID with mobile-specific redirect URIs
+- **Apple**: Sign in with Apple integration
+- **Email/Password**: Traditional authentication flow
+
+### OAuth Flow Details
+1. **Mobile OAuth**: Uses Custom Tabs (`expo-web-browser`) instead of WebView
+2. **Redirect URIs**: 
+   - Mobile: `${API_BASE}/auth/mobile/callback`
+   - Web: `${API_BASE}/auth/callback`
+3. **Deep Linking**: Handles OAuth callbacks via `yarkib://oauth/callback` scheme
+4. **Session Management**: Stores user data in `expo-secure-store`
+
+### Authentication Context Features
+- **State Management**: User, loading, authentication status
+- **Storage**: Secure token storage with fallback to localStorage for web
+- **Error Handling**: Comprehensive error handling for OAuth failures
+- **Mock Mode**: Development mode with simulated authentication
+
+## API INTEGRATION
+
+### Configuration
+- **Base URLs**: Configurable per environment (dev, staging, production)
+- **Timeouts**: 5s for connection checks, 10s for API calls
+- **Mock Mode**: Toggle between real API and mock data
+
+### API Endpoints
+- **Authentication**:
+  - `POST /auth/email/signup` - User registration
+  - `POST /auth/email/login` - User login
+  - `POST /auth/mobile/signin` - Mobile OAuth initiation
+  - `GET /auth/mobile/session` - Mobile session status
+  - `GET /auth/session` - Web session status
+  - `GET /auth/user` - User information
+
+- **Routes**:
+  - `GET /routes` - List all routes
+  - `GET /routes/{id}/elevation` - Route elevation data
+  - `POST /user/routes/{id}/save` - Save route
+  - `DELETE /user/routes/{id}/save` - Unsave route
+  - `POST /user/routes/{id}/complete` - Complete route
+  - `GET /user/routes` - User's saved/completed routes
+
+- **Profile**:
+  - `GET /me` - User profile
+  - `GET /me/stats` - User statistics
+  - `GET /me/saved-routes` - Saved routes
+  - `GET /me/completed-rides` - Completed rides
+  - `PUT /me/summary` - Update user summary
+
+### Mock Data System
+- **Route Data**: 3 sample routes with realistic data
+- **Elevation Profiles**: Generated elevation data with mathematical functions
+- **User Data**: Mock user profiles and authentication responses
+- **API Simulation**: Simulates network delays and responses
+
+## ROUTE MANAGEMENT
+
+### Route Data Structure
+```typescript
+interface Route {
+  id: string;                   // UUID
+  name: string;                 // Route name
+  description?: string;         // Route description
+  distance: number;             // Distance in kilometers
+  duration: number;             // Duration in minutes
+  difficulty: 'easy' | 'intermediate' | 'hard';
+  elevation_gain?: number;      // Elevation gain in meters
+  start_location?: {            // Starting coordinates
+    latitude: number;
+    longitude: number;
+    address?: string;
+  };
+  end_location?: {              // Ending coordinates
+    latitude: number;
+    longitude: number;
+    address?: string;
+  };
+  start_point_name?: string;    // Starting point name
+  end_point_name?: string;      // Ending point name
+  route_points?: Array<{        // Route waypoints
+    latitude: number;
+    longitude: number;
+  }>;
+  elevation_profile?: Array<{   // Elevation data
+    distance: number;           // Distance from start (km)
+    elevation: number;          // Elevation (meters)
+  }>;
+  max_elevation?: number;       // Maximum elevation
+  category_id?: string;         // Category UUID
+  images?: string[];            // Route images
+  rating?: number;              // Average rating (0-5)
+  review_count?: number;        // Number of reviews
+  tags?: string[];              // Route tags
+  gpx_file_url?: string;       // GPX file download
+  google_maps_url?: string;     // Google Maps link
+}
+```
+
+### Route Features
+- **Elevation Charts**: Interactive elevation profiles using SVG
+- **Difficulty Indicators**: Color-coded difficulty levels
+- **External Links**: GPX downloads and Google Maps integration
+- **Tag System**: Categorization and filtering
+- **Save/Complete**: User interaction with routes
+
+## UI/UX COMPONENTS
+
+### Design System
+- **Colors**: Consistent color palette with semantic meanings
+- **Typography**: SpaceMono font for technical elements
+- **Spacing**: 8px grid system for consistent layouts
+- **Shadows**: Subtle shadows for depth and hierarchy
+
+### Component Patterns
+- **Cards**: Consistent card design with headers and content
+- **Buttons**: Primary and secondary button styles
+- **Icons**: Ionicons from @expo/vector-icons
+- **Loading States**: Activity indicators and skeleton screens
+- **Error Handling**: User-friendly error messages and fallbacks
+
+### Navigation Structure
+- **Stack Navigation**: Screen-to-screen navigation
+- **Tab Navigation**: Bottom tab bar for main sections
+- **Deep Linking**: OAuth callback handling
+- **Route Parameters**: Data passing between screens
+
+## STATE MANAGEMENT
+
+### Context Usage
+- **AuthContext**: Global authentication state
+- **Local State**: Component-level state management
+- **Async State**: Loading, error, and success states
+
+### Data Flow
+1. **API Calls**: Centralized in `api.js`
+2. **State Updates**: Context providers and local state
+3. **UI Updates**: Reactive component rendering
+4. **Persistence**: Secure storage for user data
+
+## DEVELOPMENT WORKFLOW
+
+### Environment Configuration
+- **Development**: Local IP address for mobile testing
+- **Production**: ngrok URLs (temporary, needs replacement)
+- **Mock Mode**: Toggle for development without backend
+
+### Build Commands
+```bash
+npm start          # Start Expo development server
+npm run android    # Run on Android device/emulator
+npm run ios        # Run on iOS device/simulator
+npm run web        # Run in web browser
+npm run reset-project # Reset project state
+```
+
+### Development Considerations
+- **Mobile Testing**: Requires physical device or emulator
+- **Network Configuration**: Local network IP addresses
+- **OAuth Setup**: Google/Apple developer account configuration
+- **Environment Variables**: .env file for sensitive data
+
+## DEBUGGING INFORMATION
+
+### Common Issues
+1. **Backend Connection**: Check IP address in config.js
+2. **OAuth Failures**: Verify redirect URIs and client IDs
+3. **Mock Mode**: Ensure MOCK_MODE is set correctly
+4. **Network Timeouts**: Adjust timeout values in config
+
+### Logging System
+- **Console Logs**: Comprehensive logging throughout the app
+- **Error Boundaries**: React error boundary implementation
+- **API Logging**: Request/response logging for debugging
+- **OAuth Flow**: Step-by-step OAuth process logging
+
+### Testing Strategies
+- **Mock Data**: Comprehensive mock data for development
+- **Error Simulation**: Mock error scenarios
+- **Network Testing**: Backend connectivity checks
+- **OAuth Testing**: OAuth flow validation
+
+## SECURITY CONSIDERATIONS
+
+### Data Protection
+- **Secure Storage**: expo-secure-store for sensitive data
+- **Token Management**: JWT token handling
+- **OAuth Security**: PKCE flow implementation
+- **Network Security**: HTTPS for production APIs
+
+### Authentication Security
+- **Session Management**: Secure session handling
+- **Token Refresh**: Automatic token refresh logic
+- **Error Handling**: Secure error message handling
+- **Input Validation**: User input sanitization
+
+## PERFORMANCE OPTIMIZATIONS
+
+### React Native Optimizations
+- **Memoization**: useMemo and useCallback usage
+- **Lazy Loading**: Component lazy loading
+- **Image Optimization**: Expo Image component usage
+- **Animation**: React Native Reanimated for smooth animations
+
+### Network Optimizations
+- **Request Caching**: API response caching
+- **Timeout Management**: Configurable request timeouts
+- **Error Retry**: Automatic retry logic
+- **Connection Pooling**: Efficient network connection management
+
+## DEPLOYMENT CONSIDERATIONS
+
+### Build Configuration
+- **Expo Build**: EAS Build for production builds
+- **Environment Variables**: Production configuration
+- **API Endpoints**: Production backend URLs
+- **OAuth Configuration**: Production OAuth settings
+
+### Platform-Specific Code
+- **iOS**: iOS-specific navigation and UI adjustments
+- **Android**: Android-specific navigation and UI adjustments
+- **Web**: Web-specific optimizations and fallbacks
+
+## FUTURE ENHANCEMENTS
+
+### Planned Features
+- **Offline Support**: Route caching and offline access
+- **Real-time Updates**: Live route updates and notifications
+- **Social Features**: Route sharing and community features
+- **Advanced Analytics**: Detailed ride statistics and insights
+
+### Technical Improvements
+- **TypeScript Migration**: Full TypeScript implementation
+- **Testing Framework**: Jest and React Native Testing Library
+- **CI/CD Pipeline**: Automated testing and deployment
+- **Performance Monitoring**: App performance analytics
+
+## TROUBLESHOOTING GUIDE
+
+### Development Issues
+1. **Metro Bundler**: Clear cache and restart
+2. **Dependencies**: Delete node_modules and reinstall
+3. **Expo CLI**: Update to latest version
+4. **Device Connection**: Ensure device is on same network
+
+### Runtime Issues
+1. **OAuth Failures**: Check redirect URI configuration
+2. **API Errors**: Verify backend server status
+3. **Navigation Issues**: Check route configuration
+4. **State Management**: Verify context provider setup
+
+### Build Issues
+1. **TypeScript Errors**: Check type definitions and imports
+2. **Dependency Conflicts**: Resolve package version conflicts
+3. **Platform Issues**: Verify platform-specific code
+4. **Asset Issues**: Check asset file paths and formats
+
+This document provides comprehensive context for developing, debugging, and maintaining the Yarkib project. It covers all technical aspects, architecture decisions, and implementation details that an LLM would need to understand and work with the codebase effectively.
