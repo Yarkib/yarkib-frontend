@@ -1,0 +1,18 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#000000;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#333333;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="512" cy="512" r="512" fill="url(#grad)"/>
+  
+  <!-- Y letter -->
+  <path d="M 300 200 L 400 350 L 500 200 L 600 350 L 700 200 L 650 200 L 550 320 L 450 320 L 350 200 Z" fill="white"/>
+  
+  <!-- Bike wheel accent -->
+  <circle cx="512" cy="700" r="80" fill="none" stroke="white" stroke-width="8" opacity="0.3"/>
+  <circle cx="512" cy="700" r="40" fill="white" opacity="0.5"/>
+</svg>
