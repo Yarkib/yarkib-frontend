@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -20,13 +20,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 import RouteCard from '../src/components/RouteCard';
+import Sidebar from '../src/components/Sidebar';
 import { theme } from '../src/theme/index';
 import { getBaseUrl, MOCK_MODE } from '../src/utils/api';
 import { Route } from '../src/types/route';
 import { router } from 'expo-router';
 
 const HomeScreen = () => {
-  const { user, signOut } = useAuth() as AuthContextType;
+  const { user } = useAuth() as AuthContextType;
   const [routes, setRoutes] = useState<Route[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -43,6 +44,7 @@ const HomeScreen = () => {
   const [showEasyRoutes, setShowEasyRoutes] = useState(true);
   const [showIntermediateRoutes, setShowIntermediateRoutes] = useState(true);
   const [showHardRoutes, setShowHardRoutes] = useState(true);
+  const [sidebarVisible, setSidebarVisible] = useState(false);
   // Define the Category type for better type safety
   interface Category {
     id: string;
@@ -54,9 +56,8 @@ const HomeScreen = () => {
   const [categories, setCategories] = useState<Category[]>([
     { id: 'all', name: 'All', icon: 'globe-outline' } // Default "All" category
   ]);
-  const [loadingCategories, setLoadingCategories] = useState(true);
 
-  const fetchRoutes = async () => {
+  const fetchRoutes = useCallback(async () => {
     try {
       const baseUrl = getBaseUrl();
       console.log('[INFO] Fetching routes from backend...');
@@ -187,7 +188,7 @@ const HomeScreen = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -201,7 +202,7 @@ const HomeScreen = () => {
    * - GET /categories - Get all categories
    * - GET /categories/:id - Get a specific category
    */
-  const fetchCategories = async () => {
+  const fetchCategories = useCallback(async () => {
     // Check if we should use mock data for testing
     const useMockData = MOCK_MODE; // Use the global mock mode setting
     
@@ -216,7 +217,6 @@ const HomeScreen = () => {
           { id: 'mock-4', name: 'Urban', icon: 'business-outline' },
         ];
         setCategories(mockCategories);
-        setLoadingCategories(false);
       }, 500);
       return;
     }
@@ -303,10 +303,8 @@ const HomeScreen = () => {
         { id: 'city', name: 'City', icon: 'business-outline' },
         { id: 'forest', name: 'Forest', icon: 'leaf-outline' },
       ]);
-    } finally {
-      setLoadingCategories(false);
     }
-  };
+  }, []);
   
   // Helper function to determine icon based on category name
   const getIconForCategory = (name: string): string => {
@@ -320,31 +318,28 @@ const HomeScreen = () => {
     return 'trail-sign-outline'; // Default icon
   };
 
-  // Function to fetch a specific category by ID (for future use)
-  const fetchCategoryById = async (categoryId: string) => {
-    try {
-      console.log(`[INFO] Fetching category details for ID: ${categoryId}`);
-      const response = await fetch(`${getBaseUrl()}/categories/${categoryId}`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const categoryData = await response.json();
-      console.log(`[INFO] Received category details:`, categoryData);
-      
-      return categoryData;
-    } catch (error) {
-      console.error(`[ERROR] Failed to fetch category details for ID ${categoryId}:`, error);
-      return null;
+  const handleSidebarNavigation = (screen: string) => {
+    switch (screen) {
+      case 'profile':
+        router.push('/profile');
+        break;
+      case 'saved':
+        router.push('/saved-routes');
+        break;
+      case 'completed':
+        router.push('/completed-routes');
+        break;
+      default:
+        break;
     }
   };
+
 
   // Initial data loading
   useEffect(() => {
     fetchRoutes();
     fetchCategories();
-  }, []);
+  }, [fetchRoutes, fetchCategories]);
 
   // Debug effect to log when routes change
   useEffect(() => {
@@ -454,10 +449,10 @@ const HomeScreen = () => {
         
         <View style={styles.headerButtons}>
           <TouchableOpacity 
-            style={styles.profileButton}
-            onPress={() => router.push('/profile')}
+            style={styles.menuButton}
+            onPress={() => setSidebarVisible(true)}
           >
-            <Ionicons name="person-circle-outline" size={24} color={theme.colors.primary} />
+            <Ionicons name="menu" size={24} color={theme.colors.primary} />
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.showAllButton}
@@ -473,9 +468,6 @@ const HomeScreen = () => {
             }}
           >
             <Ionicons name="refresh-outline" size={20} color={theme.colors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={signOut} style={styles.signOutButton}>
-            <Ionicons name="log-out-outline" size={24} color={theme.colors.primary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -746,6 +738,13 @@ const HomeScreen = () => {
           </View>
         }
       />
+
+      {/* Sidebar */}
+      <Sidebar
+        isVisible={sidebarVisible}
+        onClose={() => setSidebarVisible(false)}
+        onNavigate={handleSidebarNavigation}
+      />
     </SafeAreaView>
   );
 };
@@ -819,7 +818,7 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
-  profileButton: {
+  menuButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
