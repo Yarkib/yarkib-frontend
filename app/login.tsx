@@ -14,16 +14,22 @@ import { router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import AuthButton from '../src/components/AuthButton';
 import { theme } from '../src/theme';
-import { MOCK_MODE } from '../src/utils/api';
 
 const LoginScreen = () => {
-  const { signIn, emailLogin } = useAuth();
+  const auth = useAuth() as any;
+  const emailLogin = auth.emailLogin;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const handleEmailLogin = async () => {
+    // Check if emailLogin function exists
+    if (!auth.emailLogin || typeof auth.emailLogin !== 'function') {
+      console.error('emailLogin function is not available:', auth.emailLogin);
+      Alert.alert('Error', 'Authentication service is not ready. Please try again.');
+      return;
+    }
     // Validate inputs
     if (!email.trim()) {
       Alert.alert('Error', 'Please enter your email');
@@ -132,18 +138,18 @@ const LoginScreen = () => {
         <AuthButton 
           provider="google" 
           onSuccess={() => console.log('Google sign in success')}
-          onError={(error) => console.error('Google sign in error:', error)}
+          onError={(error: any) => console.error('Google sign in error:', error)}
         />
         <AuthButton 
           provider="apple" 
           onSuccess={() => console.log('Apple sign in success')}
-          onError={(error) => console.error('Apple sign in error:', error)}
+          onError={(error: any) => console.error('Apple sign in error:', error)}
         />
       </View>
 
       {/* Sign Up Link */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>Don't have an account? </Text>
+        <Text style={styles.footerText}>Don&apos;t have an account? </Text>
         <TouchableOpacity onPress={() => router.push('/signup')}>
           <Text style={styles.signupLink}>Sign up</Text>
         </TouchableOpacity>

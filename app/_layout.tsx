@@ -18,7 +18,9 @@ export default function RootLayout() {
 
   // Handle deep links globally
   useEffect(() => {
-    const handleDeepLink = ({ url }: { url: string }) => {
+    const handleDeepLink = (urlOrEvent: string | { url: string }) => {
+      // Handle both string and object formats
+      const url = typeof urlOrEvent === 'string' ? urlOrEvent : urlOrEvent?.url || '';
       console.log('[DEEP LINK] Received in root layout:', url);
       
       if (url.includes('yarkib://oauth/callback')) {

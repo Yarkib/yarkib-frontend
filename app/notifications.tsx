@@ -32,6 +32,7 @@ const NotificationsScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false); // New state for filter toggle
 
   // Fetch notifications from backend
   const fetchNotifications = useCallback(async () => {
@@ -46,7 +47,7 @@ const NotificationsScreen = () => {
       console.log(`[NOTIFICATIONS] Fetching notifications for user ${user.id}`);
 
       const data = await notificationsApi.getUserNotifications(user.id, {
-        is_read: false,
+        is_read: showAll ? null : false, // Fetch all if showAll is true, otherwise only unread
         page: 1,
         limit: 50,
       });
@@ -71,7 +72,7 @@ const NotificationsScreen = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [user?.id, showAll]);
 
   // Mark notification as read
   const markAsRead = async (notificationId: string) => {
@@ -292,7 +293,10 @@ const NotificationsScreen = () => {
       activeOpacity={0.7}
     >
       <View style={styles.notificationContent}>
-        <View style={styles.notificationIconContainer}>
+        <View style={[
+          styles.notificationIconContainer,
+          !item.is_read && styles.unreadIconContainer
+        ]}>
           <Ionicons
             name={getNotificationIcon(item.type)}
             size={24}
@@ -307,9 +311,14 @@ const NotificationsScreen = () => {
           ]}>
             {item.message}
           </Text>
-          <Text style={styles.notificationTime}>
-            {formatNotificationTime(item.created_at)}
-          </Text>
+          <View style={styles.notificationMeta}>
+            <Text style={styles.notificationTime}>
+              {formatNotificationTime(item.created_at)}
+            </Text>
+            {item.is_read && (
+              <Text style={styles.readIndicator}>Read</Text>
+            )}
+          </View>
           {/* Debug info - remove in production */}
           {__DEV__ && (
             <Text style={styles.debugText}>
@@ -336,7 +345,20 @@ const NotificationsScreen = () => {
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Notifications</Text>
-          <View style={styles.placeholder} />
+          <TouchableOpacity
+            style={[styles.filterButton, showAll && styles.filterButtonActive]}
+            onPress={() => setShowAll(!showAll)}
+          >
+            <Ionicons 
+              name={showAll ? "list-outline" : "mail-unread-outline"} 
+              size={16} 
+              color="white" 
+              style={{ marginRight: 4 }}
+            />
+            <Text style={styles.filterButtonText}>
+              {showAll ? 'All' : 'Unread'}
+            </Text>
+          </TouchableOpacity>
         </View>
         
         <View style={styles.loadingContainer}>
@@ -358,7 +380,20 @@ const NotificationsScreen = () => {
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Notifications</Text>
-          <View style={styles.placeholder} />
+          <TouchableOpacity
+            style={[styles.filterButton, showAll && styles.filterButtonActive]}
+            onPress={() => setShowAll(!showAll)}
+          >
+            <Ionicons 
+              name={showAll ? "list-outline" : "mail-unread-outline"} 
+              size={16} 
+              color="white" 
+              style={{ marginRight: 4 }}
+            />
+            <Text style={styles.filterButtonText}>
+              {showAll ? 'All' : 'Unread'}
+            </Text>
+          </TouchableOpacity>
         </View>
         
         <View style={styles.errorContainer}>
@@ -383,7 +418,32 @@ const NotificationsScreen = () => {
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifications</Text>
-        <View style={styles.placeholder} />
+        <TouchableOpacity
+          style={[styles.filterButton, showAll && styles.filterButtonActive]}
+          onPress={() => setShowAll(!showAll)}
+        >
+          <Ionicons 
+            name={showAll ? "list-outline" : "mail-unread-outline"} 
+            size={16} 
+            color="white" 
+            style={{ marginRight: 4 }}
+          />
+          <Text style={styles.filterButtonText}>
+            {showAll ? 'All' : 'Unread'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Filter Status */}
+      <View style={styles.filterStatus}>
+        <Text style={styles.filterStatusText}>
+          {showAll ? 'All Notifications' : 'Unread Notifications'} ({notifications.length})
+        </Text>
+        {!showAll && notifications.length > 0 && (
+          <Text style={styles.filterHint}>
+            Tap "All" to see read notifications
+          </Text>
+        )}
       </View>
 
       {/* Notifications List */}
@@ -404,9 +464,14 @@ const NotificationsScreen = () => {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Ionicons name="notifications-off-outline" size={64} color={theme.colors.textSecondary} />
-            <Text style={styles.emptyTitle}>No notifications</Text>
+            <Text style={styles.emptyTitle}>
+              {showAll ? 'No notifications' : 'No unread notifications'}
+            </Text>
             <Text style={styles.emptySubtitle}>
-              You'll receive notifications for group ride invitations and updates here
+              {showAll 
+                ? 'You have no notifications yet'
+                : 'You\'re all caught up! Switch to "All" to see read notifications.'
+              }
             </Text>
           </View>
         }
@@ -440,6 +505,43 @@ const styles = StyleSheet.create({
   },
   placeholder: {
     width: 40,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: theme.colors.primary,
+    borderRadius: theme.borderRadius.sm,
+  },
+  filterButtonActive: {
+    backgroundColor: theme.colors.primary,
+    opacity: 1,
+  },
+  filterButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterStatus: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+    backgroundColor: theme.colors.cardBackground,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  filterStatusText: {
+    ...theme.typography.body,
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.text,
+  },
+  filterHint: {
+    ...theme.typography.body,
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
+    fontStyle: 'italic',
   },
   loadingContainer: {
     flex: 1,
@@ -502,6 +604,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: theme.spacing.md,
   },
+  unreadIconContainer: {
+    backgroundColor: theme.colors.primary + '15',
+  },
   notificationTextContainer: {
     flex: 1,
   },
@@ -514,11 +619,22 @@ const styles = StyleSheet.create({
   unreadText: {
     fontWeight: '600',
   },
+  notificationMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
   notificationTime: {
     ...theme.typography.body,
     fontSize: 14,
     color: theme.colors.textSecondary,
-    marginTop: 2,
+  },
+  readIndicator: {
+    ...theme.typography.body,
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+    fontStyle: 'italic',
   },
   debugText: {
     ...theme.typography.body,

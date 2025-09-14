@@ -31,7 +31,7 @@ interface GroupRideInvitation {
     created_by: string;
     status: string;
     created_at: string;
-    route: {
+    routes: {
       id: string;
       name: string;
       description: string;
@@ -39,14 +39,16 @@ interface GroupRideInvitation {
       duration: number;
       difficulty: string;
       elevation_gain: number;
-      start_point_name: string;
-      end_point_name: string;
+      start_location?: string;
+      end_location?: string;
+      start_point_name?: string;
+      end_point_name?: string;
       images: string[];
     };
-    creator: {
+    profiles: {
       id: string;
-      name: string;
-      username: string;
+      full_name?: string;
+      username?: string;
       avatar_url?: string;
     };
   };
@@ -60,6 +62,8 @@ const GroupRideInvitationScreen = () => {
   const [loading, setLoading] = useState(true);
   const [responding, setResponding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState(false);
+  const [rejected, setRejected] = useState(false);
 
   useEffect(() => {
     if (invitationData) {
@@ -83,31 +87,18 @@ const GroupRideInvitationScreen = () => {
 
     try {
       setResponding(true);
-      console.log('[INVITATION] Accepting invitation:', invitation.group_ride_id);
+      console.log('[INVITATION] Accepting invitation for group ride:', invitation.group_ride_id);
 
       await groupRideApi.acceptInvitation(invitation.group_ride_id, user.id);
 
-      Alert.alert(
-        'Invitation Accepted!',
-        `You've joined the group ride "${invitation.group_ride.route.name}".`,
-        [
-          {
-            text: 'View Group Ride',
-            onPress: () => {
-              router.replace({
-                pathname: '/group-ride-details',
-                params: {
-                  groupRideData: JSON.stringify(invitation.group_ride),
-                },
-              });
-            },
-          },
-          {
-            text: 'Go Home',
-            onPress: () => router.replace('/home'),
-          },
-        ]
-      );
+      // Show success state
+      setAccepted(true);
+      
+      // Auto-navigate to home after 2 seconds
+      setTimeout(() => {
+        router.replace('/home');
+      }, 2000);
+
     } catch (error: any) {
       console.error('[INVITATION] Error accepting invitation:', error);
       Alert.alert('Error', `Failed to accept invitation: ${error.message}`);
@@ -133,22 +124,28 @@ const GroupRideInvitationScreen = () => {
           onPress: async () => {
             try {
               setResponding(true);
-              console.log('[INVITATION] Rejecting invitation:', invitation.group_ride_id);
+              console.log('[INVITATION] Rejecting invitation for group ride:', invitation.group_ride_id);
+              console.log('[INVITATION] User ID:', user.id);
+              console.log('[INVITATION] Full invitation data:', invitation);
 
-              await groupRideApi.rejectInvitation(invitation.group_ride_id, user.id);
+              const result = await groupRideApi.rejectInvitation(invitation.group_ride_id, user.id);
+              console.log('[INVITATION] Reject result:', result);
 
-              Alert.alert(
-                'Invitation Declined',
-                'You have declined the group ride invitation.',
-                [
-                  {
-                    text: 'OK',
-                    onPress: () => router.replace('/home'),
-                  },
-                ]
-              );
+              // Show success state
+              setRejected(true);
+              
+              // Auto-navigate to home after 2 seconds
+              setTimeout(() => {
+                router.replace('/home');
+              }, 2000);
             } catch (error: any) {
               console.error('[INVITATION] Error rejecting invitation:', error);
+              console.error('[INVITATION] Error details:', {
+                message: error.message,
+                stack: error.stack,
+                invitation: invitation,
+                userId: user.id
+              });
               Alert.alert('Error', `Failed to reject invitation: ${error.message}`);
             } finally {
               setResponding(false);
@@ -212,8 +209,67 @@ const GroupRideInvitationScreen = () => {
     );
   }
 
+  // Success state for accepted invitation
+  if (accepted) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.successContainer}>
+          <Ionicons name="checkmark-circle" size={80} color="#34C759" />
+          <Text style={styles.successTitle}>Invitation Accepted!</Text>
+          <Text style={styles.successMessage}>
+            You've successfully joined the group ride "{invitation.group_ride?.routes?.name || 'Unknown Route'}".
+          </Text>
+          <Text style={styles.redirectText}>Returning to home...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Success state for rejected invitation
+  if (rejected) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.successContainer}>
+          <Ionicons name="close-circle" size={80} color="#FF9500" />
+          <Text style={styles.successTitle}>Invitation Declined</Text>
+          <Text style={styles.successMessage}>
+            You have declined the group ride invitation.
+          </Text>
+          <Text style={styles.redirectText}>Returning to home...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const { group_ride, message } = invitation;
-  const { route, creator } = group_ride;
+  // The actual data structure uses 'routes' (plural) and 'profiles' instead of 'route' and 'creator'
+  const route = group_ride?.routes;
+  const creator = group_ride?.profiles;
+  
+  // Debug logging to understand the data structure
+  console.log('[INVITATION] Group ride data:', group_ride);
+  console.log('[INVITATION] Route data:', route);
+  console.log('[INVITATION] Creator data:', creator);
+
+  // Safety check for required data
+  if (!route || !creator) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color="#FF3B30" />
+          <Text style={styles.errorText}>
+            Invalid invitation data - missing route or creator information
+          </Text>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -238,22 +294,22 @@ const GroupRideInvitationScreen = () => {
           </View>
 
           <Text style={styles.invitationMessage}>
-            {message || `${creator.name} invited you to join a group ride!`}
+            {message || `${creator?.full_name || creator?.username || 'Someone'} invited you to join a group ride!`}
           </Text>
         </View>
 
         {/* Route Information */}
         <View style={styles.routeCard}>
           <View style={styles.routeHeader}>
-            <Text style={styles.routeTitle}>{route.name}</Text>
-            <View style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(route.difficulty) }]}>
-              <Text style={styles.difficultyText}>{route.difficulty}</Text>
+            <Text style={styles.routeTitle}>{route?.name || 'Unknown Route'}</Text>
+            <View style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(route?.difficulty || 'easy') }]}>
+              <Text style={styles.difficultyText}>{route?.difficulty || 'Easy'}</Text>
             </View>
           </View>
 
-          <Text style={styles.routeDescription}>{route.description}</Text>
+          <Text style={styles.routeDescription}>{route?.description || 'No description available'}</Text>
 
-          {route.images && route.images.length > 0 && (
+          {route?.images && route.images.length > 0 && (
             <Image source={{ uri: route.images[0] }} style={styles.routeImage} />
           )}
 
@@ -261,15 +317,15 @@ const GroupRideInvitationScreen = () => {
           <View style={styles.routeStats}>
             <View style={styles.statItem}>
               <Ionicons name="location-outline" size={20} color={theme.colors.textSecondary} />
-              <Text style={styles.statText}>{route.distance} km</Text>
+              <Text style={styles.statText}>{route?.distance || 0} km</Text>
             </View>
             <View style={styles.statItem}>
               <Ionicons name="time-outline" size={20} color={theme.colors.textSecondary} />
-              <Text style={styles.statText}>{route.duration} min</Text>
+              <Text style={styles.statText}>{route?.duration || 0} min</Text>
             </View>
             <View style={styles.statItem}>
               <Ionicons name="trending-up-outline" size={20} color={theme.colors.textSecondary} />
-              <Text style={styles.statText}>{route.elevation_gain} m</Text>
+              <Text style={styles.statText}>{route?.elevation_gain || 0} m</Text>
             </View>
           </View>
 
@@ -277,12 +333,16 @@ const GroupRideInvitationScreen = () => {
           <View style={styles.routePoints}>
             <View style={styles.pointItem}>
               <View style={[styles.pointDot, { backgroundColor: '#34C759' }]} />
-              <Text style={styles.pointText}>{route.start_point_name}</Text>
+              <Text style={styles.pointText}>
+                {route?.start_point_name || (route?.start_location ? 'Start Location' : 'Start Point')}
+              </Text>
             </View>
             <View style={styles.pointSeparator} />
             <View style={styles.pointItem}>
               <View style={[styles.pointDot, { backgroundColor: '#FF3B30' }]} />
-              <Text style={styles.pointText}>{route.end_point_name}</Text>
+              <Text style={styles.pointText}>
+                {route?.end_point_name || (route?.end_location ? 'End Location' : 'End Point')}
+              </Text>
             </View>
           </View>
         </View>
@@ -291,7 +351,7 @@ const GroupRideInvitationScreen = () => {
         <View style={styles.creatorCard}>
           <Text style={styles.creatorTitle}>Ride Organizer</Text>
           <View style={styles.creatorInfo}>
-            {creator.avatar_url ? (
+            {creator?.avatar_url ? (
               <Image source={{ uri: creator.avatar_url }} style={styles.creatorAvatar} />
             ) : (
               <View style={styles.creatorAvatarPlaceholder}>
@@ -299,8 +359,8 @@ const GroupRideInvitationScreen = () => {
               </View>
             )}
             <View style={styles.creatorDetails}>
-              <Text style={styles.creatorName}>{creator.name}</Text>
-              <Text style={styles.creatorUsername}>@{creator.username}</Text>
+              <Text style={styles.creatorName}>{creator?.full_name || creator?.username || 'Unknown User'}</Text>
+              <Text style={styles.creatorUsername}>@{creator?.username || 'unknown'}</Text>
             </View>
           </View>
         </View>
@@ -311,12 +371,12 @@ const GroupRideInvitationScreen = () => {
           <View style={styles.detailItem}>
             <Ionicons name="calendar-outline" size={20} color={theme.colors.textSecondary} />
             <Text style={styles.detailText}>
-              Created on {formatDate(group_ride.created_at)}
+              Created on {formatDate(group_ride?.created_at || new Date().toISOString())}
             </Text>
           </View>
           <View style={styles.detailItem}>
             <Ionicons name="flag-outline" size={20} color={theme.colors.textSecondary} />
-            <Text style={styles.detailText}>Status: {group_ride.status}</Text>
+            <Text style={styles.detailText}>Status: {group_ride?.status || 'Unknown'}</Text>
           </View>
         </View>
       </ScrollView>
@@ -399,6 +459,36 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: theme.spacing.md,
     marginBottom: theme.spacing.lg,
+  },
+  successContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.xl,
+  },
+  successTitle: {
+    ...theme.typography.h2,
+    fontSize: 24,
+    fontWeight: '600',
+    color: theme.colors.text,
+    textAlign: 'center',
+    marginTop: theme.spacing.lg,
+    marginBottom: theme.spacing.md,
+  },
+  successMessage: {
+    ...theme.typography.body,
+    fontSize: 16,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: theme.spacing.lg,
+  },
+  redirectText: {
+    ...theme.typography.body,
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   backButton: {
     backgroundColor: theme.colors.primary,

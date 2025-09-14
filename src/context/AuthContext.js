@@ -203,28 +203,54 @@ export const AuthProvider = ({ children }) => {
     const handleDeepLink = (url) => {
       console.log('[DEEP LINK] Received deep link:', url);
       
-      if (url.includes('yarkib://oauth/callback')) {
+      // Ensure url is a string
+      const urlString = typeof url === 'string' ? url : url?.url || '';
+      
+      if (urlString.includes('yarkib://oauth/callback')) {
         console.log('[DEEP LINK] OAuth callback detected');
         
-        // Parse the URL parameters
-        const urlParams = new URLSearchParams(url.split('?')[1]);
-        const session = urlParams.get('session');
-        const error = urlParams.get('error');
-        
-        if (error) {
-          console.log('[DEEP LINK] OAuth error:', error);
-          Alert.alert('OAuth Error', decodeURIComponent(error));
-        } else if (session) {
-          console.log('[DEEP LINK] Session data received');
-          try {
-            const sessionData = JSON.parse(decodeURIComponent(session));
-            handleAuthSuccess(sessionData);
-          } catch (parseError) {
-            console.error('[DEEP LINK] Error parsing session data:', parseError);
-            Alert.alert('Error', 'Failed to parse authentication data');
+        try {
+          // Parse the URL parameters safely
+          const urlObj = new URL(urlString);
+          const session = urlObj.searchParams.get('session');
+          const error = urlObj.searchParams.get('error');
+          
+          if (error) {
+            console.log('[DEEP LINK] OAuth error:', error);
+            Alert.alert('OAuth Error', decodeURIComponent(error));
+          } else if (session) {
+            console.log('[DEEP LINK] Session data received');
+            try {
+              const sessionData = JSON.parse(decodeURIComponent(session));
+              handleAuthSuccess(sessionData);
+            } catch (parseError) {
+              console.error('[DEEP LINK] Error parsing session data:', parseError);
+              Alert.alert('Error', 'Failed to parse authentication data');
+            }
+          } else {
+            console.log('[DEEP LINK] No session or error in deep link');
           }
-        } else {
-          console.log('[DEEP LINK] No session or error in deep link');
+        } catch (urlError) {
+          console.error('[DEEP LINK] Error parsing URL:', urlError);
+          // Fallback to manual parsing if URL constructor fails
+          const queryString = urlString.split('?')[1];
+          if (queryString) {
+            const urlParams = new URLSearchParams(queryString);
+            const session = urlParams.get('session');
+            const error = urlParams.get('error');
+            
+            if (error) {
+              Alert.alert('OAuth Error', decodeURIComponent(error));
+            } else if (session) {
+              try {
+                const sessionData = JSON.parse(decodeURIComponent(session));
+                handleAuthSuccess(sessionData);
+              } catch (parseError) {
+                console.error('[DEEP LINK] Error parsing session data:', parseError);
+                Alert.alert('Error', 'Failed to parse authentication data');
+              }
+            }
+          }
         }
       }
     };

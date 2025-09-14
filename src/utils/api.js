@@ -943,7 +943,12 @@ export const groupRideApi = {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[GROUP RIDE API] Get details failed: ${response.status} - ${errorText}`);
+        // Only log non-404 errors as errors, 404s are expected for deleted group rides
+        if (response.status === 404) {
+          console.log(`[GROUP RIDE API] Group ride not found: ${groupRideId}`);
+        } else {
+          console.error(`[GROUP RIDE API] Get details failed: ${response.status} - ${errorText}`);
+        }
         throw new Error(`Failed to get group ride details: ${response.status}`);
       }
 
@@ -959,7 +964,7 @@ export const groupRideApi = {
   // Accept group ride invitation
   acceptInvitation: async (groupRideId, userId) => {
     try {
-      console.log(`[GROUP RIDE API] User ${userId} accepting invitation to group ride ${groupRideId}`);
+      console.log(`[GROUP RIDE API] User ${userId} accepting invitation for group ride ${groupRideId}`);
       
       const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}/accept`, {
         method: 'POST',
@@ -989,7 +994,9 @@ export const groupRideApi = {
   // Reject group ride invitation
   rejectInvitation: async (groupRideId, userId) => {
     try {
-      console.log(`[GROUP RIDE API] User ${userId} rejecting invitation to group ride ${groupRideId}`);
+      console.log(`[GROUP RIDE API] User ${userId} rejecting invitation for group ride ${groupRideId}`);
+      console.log(`[GROUP RIDE API] Request URL: ${getBaseUrl()}/group-rides/${groupRideId}/reject`);
+      console.log(`[GROUP RIDE API] Request body:`, { user_id: userId });
       
       const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}/reject`, {
         method: 'POST',
@@ -1001,10 +1008,13 @@ export const groupRideApi = {
         }),
       });
 
+      console.log(`[GROUP RIDE API] Response status: ${response.status}`);
+      console.log(`[GROUP RIDE API] Response headers:`, response.headers);
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[GROUP RIDE API] Reject failed: ${response.status} - ${errorText}`);
-        throw new Error(`Failed to reject invitation: ${response.status}`);
+        throw new Error(`Failed to reject invitation: ${response.status} - ${errorText}`);
       }
 
       const data = await response.json();
@@ -1012,6 +1022,12 @@ export const groupRideApi = {
       return data;
     } catch (error) {
       console.error(`[GROUP RIDE API] Error rejecting invitation:`, error);
+      console.error(`[GROUP RIDE API] Error details:`, {
+        message: error.message,
+        stack: error.stack,
+        groupRideId,
+        userId
+      });
       throw error;
     }
   },
@@ -1117,10 +1133,14 @@ export const notificationsApi = {
       console.log(`[NOTIFICATIONS API] Getting notifications for user ${userId}`);
       
       const params = new URLSearchParams({
-        is_read: is_read.toString(),
         page: page.toString(),
         limit: limit.toString(),
       });
+      
+      // Only add is_read parameter if it's not null (null means fetch all)
+      if (is_read !== null) {
+        params.append('is_read', is_read.toString());
+      }
 
       const response = await fetch(`${getBaseUrl()}/notifications/${userId}?${params}`, {
         method: 'GET',
