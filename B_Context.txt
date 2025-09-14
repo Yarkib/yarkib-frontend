@@ -1,0 +1,989 @@
+# BACKEND CONTEXT DOCUMENT
+# Bike Riding App Backend - Complete Development & Debugging Guide
+# Version: 2.0.0
+# Last Updated: January 2025
+
+## PROJECT OVERVIEW
+This is a comprehensive Node.js/Express backend server for the Yarkib Bike Riding App that serves as an intermediary between frontend applications (web and mobile) and Supabase. The backend handles user authentication (OAuth and email), route management, user interactions with routes, admin panel functionality, and provides a complete RESTful API for the cycling community.
+
+## PROJECT STRUCTURE
+```
+Backend/
+├── index.js                      # Main server file (1728 lines)
+├── package.json                  # Dependencies and scripts
+├── package-lock.json             # Locked dependency versions
+├── .env                          # Environment variables (not in repo)
+├── API_DOCUMENTATION.md          # Complete API documentation (1447 lines)
+├── USER_ROUTES_UPDATE_SUMMARY.md # User routes implementation summary
+├── README.md                     # Setup instructions
+├── B_Context.txt                 # This comprehensive context document
+├── schema.txt                    # Database schema (context only)
+├── shema.sql                     # SQL schema with user_routes table
+├── task_setup.txt                # Initial setup instructions
+└── node_modules/                 # Installed dependencies
+```
+
+## TECHNICAL STACK
+- **Runtime**: Node.js (version 18.x or later)
+- **Framework**: Express.js 5.1.0
+- **Database**: Supabase (PostgreSQL with real-time features)
+- **Authentication**: Supabase Auth with JWT tokens
+- **Storage**: Supabase Storage for images and files
+- **CORS**: Enabled for cross-origin requests
+- **Environment**: dotenv for configuration management
+
+## DEPENDENCIES
+```json
+{
+  "@supabase/supabase-js": "^2.56.0",  // Supabase client library
+  "cors": "^2.8.5",                    // Cross-origin resource sharing
+  "dotenv": "^17.2.1",                 // Environment variable management
+  "express": "^5.1.0"                  // Web framework
+}
+```
+
+## ENVIRONMENT VARIABLES REQUIRED
+```bash
+# Server Configuration
+PORT=3000
+
+# Supabase Configuration
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+
+# Production Configuration
+NODE_ENV=production
+HEROKU_APP_URL=your_heroku_app_url
+
+# Development Configuration (ngrok for mobile testing)
+# ngrok URL is hardcoded in the code for development
+```
+
+## DATABASE SCHEMA DETAILS
+
+### Core Tables
+
+#### 1. profiles (Primary User Storage)
+- **id**: UUID (primary key, references auth.users.id)
+- **full_name**: TEXT (optional)
+- **avatar_url**: TEXT (optional)
+- **date_of_birth**: DATE (optional)
+- **fuel_capacity**: INTEGER (optional, in km)
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+- **Integration**: Directly linked to Supabase Auth users table
+
+#### 2. routes
+- **id**: UUID (primary key, auto-generated)
+- **name**: VARCHAR (required)
+- **description**: TEXT
+- **distance**: NUMERIC (required, in kilometers)
+- **duration**: INTEGER (required, in minutes)
+- **difficulty**: VARCHAR (enum: 'easy', 'intermediate', 'hard')
+- **elevation_gain**: INTEGER (in meters)
+- **start_location**: JSONB (latitude, longitude, address)
+- **end_location**: JSONB (latitude, longitude, address)
+- **route_points**: JSONB (array of coordinate points)
+- **category_id**: UUID (foreign key to categories)
+- **images**: ARRAY (of image URLs)
+- **rating**: NUMERIC (default 0, 0-5 scale)
+- **review_count**: INTEGER (default 0)
+- **tags**: ARRAY (of tag strings)
+- **gpx_file_url**: TEXT (optional)
+- **google_maps_url**: TEXT (optional)
+- **start_point_name**: TEXT (optional)
+- **end_point_name**: TEXT (optional)
+- **elevation_profile**: JSONB (array of distance/elevation points)
+- **max_elevation**: INTEGER (optional, in meters)
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+
+#### 3. categories
+- **id**: UUID (primary key, auto-generated)
+- **name**: VARCHAR (unique, required)
+- **description**: TEXT
+- **icon**: VARCHAR
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+
+#### 4. user_routes
+- **id**: UUID (primary key, auto-generated)
+- **user_id**: UUID (foreign key to profiles.id, required)
+- **route_id**: UUID (foreign key to routes, required)
+- **status**: VARCHAR (enum: 'saved', 'completed', required)
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+- **Constraints**: Unique combination of user_id, route_id, and status
+- **Integration**: References profiles table (linked to Supabase Auth)
+
+#### 5. admins
+- **id**: UUID (primary key, auto-generated)
+- **user_id**: UUID (unique, required)
+- **name**: VARCHAR (required)
+- **email**: VARCHAR (unique, required)
+- **created_at**: TIMESTAMP (defaults to now)
+
+#### 6. admins (Admin User Management)
+- **id**: UUID (primary key, auto-generated)
+- **user_id**: UUID (unique, references profiles.id)
+- **name**: VARCHAR (required)
+- **email**: VARCHAR (unique, required)
+- **created_at**: TIMESTAMP (defaults to now)
+- **Integration**: References profiles table for admin user management
+
+### 7. group_rides (Group Ride Sessions)
+- **id**: UUID (primary key, auto-generated)
+- **route_id**: UUID (foreign key to routes, required)
+- **created_by**: UUID (foreign key to profiles, required)
+- **status**: VARCHAR (enum: 'active', 'completed', 'cancelled', required)
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+- **Integration**: Parent entity for group ride sessions
+
+### 8. group_ride_members (Group Ride Participants)
+- **id**: UUID (primary key, auto-generated)
+- **group_ride_id**: UUID (foreign key to group_rides, required)
+- **user_id**: UUID (foreign key to profiles, required)
+- **role**: VARCHAR (enum: 'leader', 'member', defaults to 'member')
+- **joined_at**: TIMESTAMP (defaults to now)
+- **Constraints**: Unique combination of group_ride_id and user_id
+- **Integration**: Tracks accepted group ride participants
+
+### 9. group_ride_invitations (Group Ride Invitations)
+- **id**: UUID (primary key, auto-generated)
+- **group_ride_id**: UUID (foreign key to group_rides, required)
+- **sender_id**: UUID (foreign key to profiles, required)
+- **receiver_id**: UUID (foreign key to profiles, required)
+- **status**: VARCHAR (enum: 'pending', 'accepted', 'rejected', required)
+- **created_at**: TIMESTAMP (defaults to now)
+- **updated_at**: TIMESTAMP (defaults to now)
+- **Constraints**: Unique combination of group_ride_id and receiver_id
+- **Integration**: Handles invitation workflow and status tracking
+
+### 10. notifications (User Notifications)
+- **id**: UUID (primary key, auto-generated)
+- **user_id**: UUID (foreign key to profiles, required)
+- **type**: VARCHAR (notification type, required)
+- **message**: TEXT (notification message)
+- **related_id**: UUID (related entity ID, optional)
+- **is_read**: BOOLEAN (defaults to false)
+- **created_at**: TIMESTAMP (defaults to now)
+- **Integration**: System-wide notification system
+
+## AUTHENTICATION SYSTEM
+
+### Authentication Flow Types
+
+#### 1. Email Authentication
+- **Registration**: POST `/auth/email/signup`
+- **Login**: POST `/auth/email/login`
+- **Flow**: Email + Password → Supabase Auth → JWT Token
+
+#### 2. OAuth Authentication
+- **Providers**: Google, Apple
+- **Initiation**: POST `/auth/signin`
+- **Callback**: GET `/auth/callback`
+- **Flow**: OAuth Provider → Authorization Code → JWT Token
+
+#### 3. Mobile OAuth Authentication
+- **Initiation**: POST `/auth/mobile/signin`
+- **Callback**: GET `/auth/mobile/callback`
+- **Deep Link**: `yarkib://oauth/callback`
+- **Flow**: OAuth → ngrok callback → Deep link redirect
+
+### JWT Token Structure
+- **Header**: `Authorization: Bearer <jwt_token>`
+- **Token Source**: Supabase Auth
+- **Validation**: `supabase.auth.getUser(token)`
+- **Expiration**: Handled by Supabase
+
+### Authentication Middleware
+```javascript
+const authenticateUser = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Missing or invalid authorization header' });
+    }
+    
+    const token = authHeader.substring(7);
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    
+    if (error) throw error;
+    
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+};
+```
+
+### Admin Authentication Middleware
+```javascript
+const isAdmin = async (req, res, next) => {
+  try {
+    // ... user authentication ...
+    
+    // Check admin role in admins table
+    const { data: adminData, error: adminError } = await supabase
+      .from('admins')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+    
+    if (adminError || !adminData) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
+    }
+    
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: error.message });
+  }
+};
+```
+
+## USER ROUTES AUTHENTICATION SYSTEM
+
+### Current Implementation (Updated)
+User routes endpoints DO NOT use JWT. They accept `user_id` directly in the request body or URL params. User data is stored in `profiles` and `user_routes` references `profiles.id`.
+
+### Authentication Method
+- **User Routes Endpoints**: No JWT; `user_id` passed from client
+- **Group Ride Endpoints**: No JWT; `user_id` passed from client
+- **Admin Endpoints**: JWT authentication with admin role verification
+- **Public Endpoints**: No authentication required
+- **User Storage**: All user data stored in `profiles` table (linked to Supabase Auth)
+
+## GROUP RIDE SYSTEM
+
+### Overview
+The group ride system enables collaborative cycling experiences where users can create group rides, invite other users, and manage group participation through a comprehensive invitation and notification system.
+
+### Group Ride Flow
+1. **Create Group Ride**: User creates a group ride for a specific route
+2. **Auto-Membership**: Creator automatically becomes leader member
+3. **Invite Users**: Members can invite others by username
+4. **Notification System**: Invited users receive notifications
+5. **Accept/Reject**: Users can accept or reject invitations
+6. **Join Group**: Accepted users become group members
+7. **Group Management**: Leader can cancel, members can leave
+
+### Key Features
+- **Username-based Invitations**: Users are identified by unique usernames
+- **Role-based Access**: Leaders (creators) vs Members distinction
+- **Status Tracking**: Active, Completed, Cancelled states
+- **Notification System**: Real-time notifications for all group activities
+- **Pagination Support**: All list endpoints support pagination
+- **Comprehensive Validation**: UUID validation, existence checks, permission verification
+
+### Group Ride States
+- **active**: Group ride is ongoing and accepting members
+- **completed**: Group ride has finished successfully
+- **cancelled**: Group ride was cancelled by the creator
+
+### Member Roles
+- **leader**: Group ride creator, can cancel group rides
+- **member**: Regular participants, can leave but not cancel
+
+### Notification Types
+- **group_ride_invitation**: User invited to join group ride
+- **group_ride_accepted**: Invitation accepted by user
+- **group_ride_rejected**: Invitation rejected by user
+- **group_ride_cancelled**: Group ride cancelled by creator
+
+### Data Relationships
+- **group_rides** → **routes**: Each group ride is based on a route
+- **group_rides** → **profiles**: Creator reference
+- **group_ride_members** → **group_rides**: Membership tracking
+- **group_ride_members** → **profiles**: Member reference
+- **group_ride_invitations** → **group_rides**: Invitation tracking
+- **group_ride_invitations** → **profiles**: Sender/receiver references
+- **notifications** → **profiles**: User notification system
+
+### User Routes Endpoint Examples
+```javascript
+// Save a route
+POST /user/routes/save
+Body: { "user_id": "uuid", "route_id": "uuid" }
+
+// Unsave a route
+DELETE /user/routes/save
+Body: { "user_id": "uuid", "route_id": "uuid" }
+
+// Complete a route
+POST /user/routes/complete
+Body: { "user_id": "uuid", "route_id": "uuid" }
+
+// Remove completion
+DELETE /user/routes/complete
+Body: { "user_id": "uuid", "route_id": "uuid" }
+
+// Get saved routes for a user
+GET /user/routes/saved/:user_id
+
+// Get completed routes for a user
+GET /user/routes/completed/:user_id
+
+// Get status for one route for a user
+GET /user/routes/status/:user_id/:route_id
+```
+
+### Group Ride Endpoint Examples
+```javascript
+// Create group ride
+POST /group-rides
+Body: { "route_id": "uuid", "created_by": "uuid" }
+
+// Get group ride details
+GET /group-rides/:id
+
+// Invite user to group ride
+POST /group-rides/:id/invite
+Body: { "sender_id": "uuid", "receiver_username": "string" }
+
+// Accept invitation
+POST /group-rides/:id/accept
+Body: { "user_id": "uuid" }
+
+// Reject invitation
+POST /group-rides/:id/reject
+Body: { "user_id": "uuid" }
+
+// Leave group ride
+DELETE /group-rides/:id/leave
+Body: { "user_id": "uuid" }
+
+// Cancel group ride (creator only)
+DELETE /group-rides/:id/cancel
+Body: { "user_id": "uuid" }
+
+// Get user's group rides
+GET /group-rides/user/:user_id?status=active&page=1&limit=10
+
+// Get user notifications
+GET /notifications/:user_id?is_read=false&page=1&limit=20
+
+// Mark notification as read
+PUT /notifications/:id/read
+Body: { "user_id": "uuid" }
+```
+
+## API ENDPOINTS COMPLETE LIST
+
+### Health & Status
+- `GET /health` - Server health check
+
+### Authentication Endpoints
+- `POST /auth/email/signup` - Email registration with user data
+- `POST /auth/email/login` - Email authentication
+- `POST /auth/signin` - OAuth initiation (Google/Apple)
+- `GET /auth/callback` - OAuth callback handler (web)
+- `POST /auth/callback` - OAuth callback processing
+- `POST /auth/signup` - Complete OAuth registration
+- `GET /auth/user` - Get current user info (JWT required)
+- `POST /auth/mobile/signin` - Mobile OAuth initiation
+- `GET /auth/mobile/callback` - Mobile OAuth callback with deep link
+
+### Public Routes Endpoints
+- `GET /routes` - List all routes (paginated, with category filtering). Optional `user_id` query param includes `user_status` per route: `{ is_saved, is_completed }`.
+- `GET /routes/:id` - Get route details. Optional `user_id` query param includes `user_status` for this route.
+- `GET /routes/:id/elevation` - Get route elevation profile
+- `GET /routes/search` - Search routes with advanced filters
+- `GET /categories` - List all categories
+- `GET /categories/:id` - Get category details
+
+### User Routes Endpoints (No JWT; user_id provided)
+- `POST /user/routes/save` - Save a route
+- `DELETE /user/routes/save` - Unsave a route
+- `POST /user/routes/complete` - Mark route as completed
+- `DELETE /user/routes/complete` - Remove route completion
+- `GET /user/routes/saved/:user_id` - Get saved routes
+- `GET /user/routes/completed/:user_id` - Get completed routes
+- `GET /user/routes/status/:user_id/:route_id` - Get saved/completed status for one route
+
+### Group Ride Endpoints (No JWT; user_id provided)
+- `POST /group-rides` - Create group ride
+- `GET /group-rides/:id` - Get group ride details with members and invitations
+- `POST /group-rides/:id/invite` - Invite user to group ride by username
+- `POST /group-rides/:id/accept` - Accept group ride invitation
+- `POST /group-rides/:id/reject` - Reject group ride invitation
+- `DELETE /group-rides/:id/leave` - Leave group ride (members only)
+- `DELETE /group-rides/:id/cancel` - Cancel group ride (creator only)
+- `GET /group-rides/user/:user_id` - Get user's group rides with pagination
+- `GET /notifications/:user_id` - Get user notifications with pagination
+- `PUT /notifications/:id/read` - Mark notification as read
+
+### Admin Endpoints (Admin Authenticated - JWT Required)
+- `GET /admin/routes` - Admin route management with pagination
+- `GET /admin/routes/:id` - Get admin route details
+- `POST /admin/routes` - Create new route
+- `PUT /admin/routes/:id` - Update route
+- `DELETE /admin/routes/:id` - Delete route
+- `GET /admin/categories` - Admin category management
+- `GET /admin/categories/:id` - Get admin category details
+- `POST /admin/categories` - Create new category
+- `PUT /admin/categories/:id` - Update category
+- `DELETE /admin/categories/:id` - Delete category
+- `POST /admin/upload/image` - Upload route image to Supabase Storage
+- `POST /admin/login` - Admin login
+- `POST /admin/create` - Create admin user
+
+## REQUEST/RESPONSE PATTERNS
+
+### Standard Response Format
+```json
+{
+  "data": "response data",
+  "pagination": {
+    "total": 100,
+    "page": 1,
+    "limit": 10,
+    "pages": 10
+  }
+}
+```
+
+### Error Response Format
+```json
+{
+  "error": "Error message description"
+}
+```
+
+### Pagination Parameters
+- **page**: Page number (default: 1)
+- **limit**: Items per page (default: 10)
+- **offset**: Calculated as (page - 1) * limit
+
+### Search Parameters (Routes)
+- **q**: Search query (name/description)
+- **difficulty**: easy/intermediate/hard
+- **min_distance/max_distance**: Distance range in km
+- **min_elevation/max_elevation**: Elevation range in meters
+- **category_id**: Filter by category
+- **tags**: Array of tags
+
+## DATABASE OPERATIONS
+
+### Supabase Client Initialization
+```javascript
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+```
+
+### Common Query Patterns
+
+#### 1. Basic Select with Pagination
+```javascript
+const { data, error } = await supabase
+  .from('routes')
+  .select('*, categories(name, icon)')
+  .range(offset, offset + limit - 1)
+  .order('created_at', { ascending: false });
+```
+
+#### 2. Filtered Queries
+```javascript
+let query = supabase.from('routes').select('*, categories(name, icon)');
+
+if (category_id) {
+  query = query.eq('category_id', category_id);
+}
+
+if (search) {
+  query = query.ilike('name', `%${search}%`);
+}
+```
+
+#### 3. Count Queries for Pagination
+```javascript
+const { count, error: countError } = await supabase
+  .from('routes')
+  .select('id', { count: 'exact' });
+```
+
+#### 4. Insert Operations
+```javascript
+const { data, error } = await supabase
+  .from('routes')
+  .insert({
+    name,
+    description,
+    distance,
+    // ... other fields
+    created_at: new Date(),
+    updated_at: new Date()
+  })
+  .select();
+```
+
+#### 5. Update Operations
+```javascript
+const { data, error } = await supabase
+  .from('routes')
+  .update({
+    name,
+    description,
+    // ... other fields
+    updated_at: new Date()
+  })
+  .eq('id', id)
+  .select();
+```
+
+#### 6. Delete Operations
+```javascript
+const { error } = await supabase
+  .from('routes')
+  .delete()
+  .eq('id', id);
+```
+
+#### 7. Complex Joins
+```javascript
+const { data, error } = await supabase
+  .from('user_routes')
+  .select(`
+    *,
+    routes (
+      id,
+      name,
+      description,
+      distance,
+      duration,
+      difficulty,
+      elevation_gain,
+      start_location,
+      end_location,
+      images,
+      rating,
+      tags,
+      categories (name, icon)
+    )
+  `)
+  .eq('user_id', user_id)
+  .eq('status', 'saved');
+```
+
+## ERROR HANDLING PATTERNS
+
+### Standard Error Handling
+```javascript
+try {
+  const { data, error } = await supabase.from('routes').select('*');
+  
+  if (error) throw error;
+  
+  res.json(data);
+} catch (error) {
+  res.status(500).json({ error: error.message });
+}
+```
+
+### Validation Error Handling
+```javascript
+if (!name || !description || !distance || !duration || !difficulty) {
+  return res.status(400).json({ error: 'Missing required fields' });
+}
+```
+
+### Not Found Error Handling
+```javascript
+if (!data) {
+  return res.status(404).json({ error: 'Route not found' });
+}
+```
+
+### Authorization Error Handling
+```javascript
+if (adminError || !adminData) {
+  return res.status(403).json({ error: 'Unauthorized: Admin access required' });
+}
+```
+
+## MOBILE OAUTH FLOW DETAILS
+
+### Mobile OAuth Process
+1. **Initiation**: Mobile app calls `/auth/mobile/signin`
+2. **OAuth URL**: Backend generates OAuth URL with ngrok callback
+3. **User Authentication**: User authenticates with Google/Apple
+4. **Callback**: Google/Apple redirects to ngrok URL
+5. **Token Exchange**: Backend exchanges code for session
+6. **Deep Link**: Backend redirects to mobile app deep link
+7. **Session Data**: Mobile app receives session via deep link
+
+### Deep Link Format
+```
+yarkib://oauth/callback?session=<encoded_session_data>
+yarkib://oauth/callback?error=<encoded_error_message>
+```
+
+### ngrok Configuration
+- **Development URL**: `https://7477b4c1d1b3.ngrok-free.app`
+- **Production URL**: Uses `HEROKU_APP_URL` environment variable
+- **Purpose**: Provides HTTPS endpoint for OAuth callbacks in development
+
+## FILE UPLOAD SYSTEM
+
+### Image Upload Endpoint
+- **Route**: `POST /admin/upload/image`
+- **Authentication**: Admin required
+- **Storage**: Supabase Storage bucket 'route-images'
+- **Format**: Base64 encoded images
+- **Path Structure**: `routes/{timestamp}_{filename}`
+
+### GPX File Handling
+- **Note**: GPX files are not handled by backend
+- **Frontend Responsibility**: Upload to storage and send URL to backend
+- **Storage**: Supabase Storage (bucket not specified in code)
+
+## SECURITY CONSIDERATIONS
+
+### Authentication Security
+- JWT tokens validated on every authenticated request
+- Service role key used for admin operations
+- OAuth providers handle sensitive authentication data
+
+### Input Validation
+- Required field validation on all endpoints
+- Data type validation (e.g., difficulty enum values)
+- Range validation (e.g., fuel_capacity_km: 50-500)
+
+### CORS Configuration
+- CORS enabled for cross-origin requests
+- Allowed origins: `http://localhost:8081`, `http://localhost:3000`, `http://192.168.0.102:3000`, `http://192.168.0.102:8081`
+- Allowed methods: `GET, POST, PUT, DELETE, OPTIONS`
+- Allowed headers: `Content-Type, Authorization, X-Requested-With`
+- Credentials: enabled
+
+### Environment Variable Security
+- Sensitive keys stored in .env file
+- Service role key provides full database access
+- Production URLs configurable via environment variables
+
+## DEVELOPMENT GUIDELINES
+
+### Code Structure
+- **Express Router**: Single file with all routes
+- **Middleware**: Authentication and admin checks
+- **Error Handling**: Try-catch blocks with consistent error responses
+- **Logging**: Console.log statements for debugging
+
+### Naming Conventions
+- **Endpoints**: RESTful naming (GET, POST, PUT, DELETE)
+- **Variables**: camelCase
+- **Database Fields**: snake_case
+- **Constants**: UPPER_SNAKE_CASE
+
+### Response Formatting
+- **Success**: JSON with data and optional pagination
+- **Errors**: JSON with error message
+- **Status Codes**: Standard HTTP status codes
+- **Headers**: Content-Type: application/json
+
+### Database Best Practices
+- **Foreign Keys**: Proper relationships between tables
+- **Indexes**: UUID primary keys for performance
+- **Constraints**: Check constraints for data validation
+- **Cascading**: ON DELETE CASCADE for user_routes
+
+## DEBUGGING INFORMATION
+
+### Console Logging
+- **Format**: `[CONTEXT] Message: details`
+- **Examples**: 
+  - `[MOBILE OAUTH] Signin request: { provider, redirect_uri, platform }`
+  - `[MOBILE OAUTH] OAuth URL generated: ${data.url}`
+  - `🔑 OAuth SignIn Request: ${req.body}`
+
+### Common Debug Points
+1. **OAuth Flow**: Check ngrok URL accessibility
+2. **Database Queries**: Verify Supabase connection
+3. **Authentication**: Validate JWT token format
+4. **Mobile Deep Links**: Test deep link handling
+5. **File Uploads**: Check Supabase Storage permissions
+
+### Error Scenarios
+1. **401 Unauthorized**: Invalid or missing JWT token
+2. **403 Forbidden**: User lacks admin privileges
+3. **404 Not Found**: Resource doesn't exist
+4. **500 Internal Server Error**: Database or server error
+
+## DEPLOYMENT CONSIDERATIONS
+
+### Production Environment
+- **Port**: Configurable via PORT environment variable
+- **Host**: Binds to '0.0.0.0' for external access
+- **HTTPS**: Requires reverse proxy (e.g., nginx)
+- **Environment**: Set NODE_ENV=production
+
+### Heroku Deployment
+- **Environment Variable**: HEROKU_APP_URL
+- **Port**: Heroku assigns PORT automatically
+- **Database**: Supabase connection via environment variables
+
+### Development Environment
+- **Port**: Default 3000
+- **ngrok**: Required for mobile OAuth testing
+- **Local Database**: Supabase cloud instance
+- **CORS**: Enabled for local development
+
+## TESTING STRATEGIES
+
+### API Testing
+- **Tool**: Postman or similar
+- **Authentication**: JWT tokens from login endpoints
+- **Test Data**: Sample routes, categories, users
+
+### Mobile Testing
+- **OAuth Flow**: Test with ngrok tunnel
+- **Deep Links**: Verify mobile app receives data
+- **Platform Differences**: Android vs iOS handling
+
+### Database Testing
+- **CRUD Operations**: Test all endpoints
+- **Relationships**: Verify foreign key constraints
+- **Data Validation**: Test constraint violations
+
+## PERFORMANCE CONSIDERATIONS
+
+### Database Optimization
+- **Pagination**: Implemented on all list endpoints
+- **Selective Fields**: Only fetch required data
+- **Indexes**: UUID primary keys for fast lookups
+
+### Response Optimization
+- **JSON Formatting**: Consistent response structure
+- **Error Handling**: Fast failure for invalid requests
+- **Caching**: No caching implemented (consider Redis for production)
+
+### Scalability
+- **Stateless**: No session storage on server
+- **Database**: Supabase handles scaling
+- **File Storage**: Supabase Storage for media files
+
+## MONITORING AND LOGGING
+
+### Current Logging
+- **Console Output**: Basic request/response logging
+- **Error Logging**: Error details in console
+- **OAuth Flow**: Detailed OAuth process logging
+
+### Recommended Monitoring
+- **Request Logging**: HTTP method, path, status, response time
+- **Error Tracking**: Error rates and types
+- **Performance Metrics**: Response times, database query performance
+- **Health Checks**: Database connectivity, external service status
+
+## FUTURE ENHANCEMENTS
+
+### Potential Improvements
+1. **Rate Limiting**: Implement API rate limiting
+2. **Caching**: Add Redis for frequently accessed data
+3. **Webhooks**: Real-time notifications for route updates
+4. **Analytics**: Track API usage and performance
+5. **Documentation**: Auto-generated API documentation
+6. **Testing**: Unit and integration tests
+7. **CI/CD**: Automated deployment pipeline
+
+### Architecture Evolution
+1. **Microservices**: Split into smaller, focused services
+2. **GraphQL**: Consider GraphQL for complex queries
+3. **Event-Driven**: Implement event sourcing for route changes
+4. **Real-time**: WebSocket support for live updates
+
+## TROUBLESHOOTING GUIDE
+
+### Common Issues
+
+#### 1. OAuth Callback Failures
+- **Symptom**: Users can't complete OAuth login
+- **Cause**: ngrok URL not accessible or expired
+- **Solution**: Update ngrok URL and restart server
+
+#### 2. Database Connection Issues
+- **Symptom**: 500 errors on database operations
+- **Cause**: Invalid Supabase credentials or network issues
+- **Solution**: Verify environment variables and network connectivity
+
+#### 3. JWT Token Validation Failures
+- **Symptom**: 401 errors on authenticated endpoints
+- **Cause**: Expired or invalid tokens
+- **Solution**: Implement token refresh mechanism
+
+#### 4. Mobile Deep Link Issues
+- **Symptom**: Mobile app doesn't receive OAuth data
+- **Cause**: Deep link scheme not properly configured
+- **Solution**: Verify deep link configuration in mobile app
+
+#### 5. File Upload Failures
+- **Symptom**: Image uploads fail with 500 errors
+- **Cause**: Supabase Storage permissions or bucket issues
+- **Solution**: Check Storage bucket permissions and policies
+
+### Debug Commands
+```bash
+# Check server status
+curl http://localhost:3000/health
+
+# Test OAuth initiation
+curl -X POST http://localhost:3000/auth/signin \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "google"}'
+
+# Test saved routes for a user (no JWT)
+curl http://localhost:3000/user/routes/saved/05537ebe-00a5-4b69-8552-a9c07bd2185a
+
+# Save a route (no JWT)
+curl -X POST http://localhost:3000/user/routes/save \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"05537ebe-00a5-4b69-8552-a9c07bd2185a","route_id":"<route_uuid>"}'
+```
+
+## RECENT UPDATES AND CURRENT STATUS
+
+### Latest Changes (January 2025)
+1. **Database Schema Update**: Migrated from `users` table to `profiles` table for better Supabase Auth integration
+2. **User Routes Integration**: `user_routes.status` column (not `action`) confirmed; references `profiles.id`
+3. **User Routes Auth Change**: Removed JWT for user routes; endpoints accept `user_id` directly
+4. **Routes API Enhancement**: `/routes`, `/routes/search`, `/routes/:id` optionally include `user_status` when `user_id` is provided
+5. **CORS Configuration**: Explicit origins, headers, methods, and credentials enabled
+6. **Mobile OAuth Flow**: Enhanced mobile OAuth with deep link support
+7. **Admin Panel**: Full CRUD operations for routes and categories
+8. **File Upload System**: Image upload to Supabase Storage
+9. **Search and Filtering**: Advanced route search with multiple filters
+10. **Group Ride System**: Complete collaborative riding functionality with invitations and notifications
+
+### Current Implementation Status
+- ✅ **Authentication System**: Complete (OAuth, Email, Mobile)
+- ✅ **Public Routes API**: Complete with pagination and search
+- ✅ **User Routes API**: Complete; user_id-based (no JWT) and profiles integration
+- ✅ **Group Ride System**: Complete with invitations, notifications, and member management
+- ✅ **Admin Panel API**: Complete with full CRUD operations
+- ✅ **File Upload**: Complete for images
+- ✅ **Database Schema**: Complete with all required tables including group ride tables
+- ✅ **API Documentation**: Complete with examples
+- ⚠️ **Testing**: Basic manual testing only
+- ⚠️ **Monitoring**: Basic console logging only
+- ⚠️ **Rate Limiting**: Not implemented
+- ⚠️ **Caching**: Not implemented
+
+### Known Issues and Limitations
+1. **ngrok URL**: Hardcoded development ngrok URL needs updating
+2. **Error Handling**: Could be more comprehensive
+3. **Input Validation**: Basic validation, could be enhanced
+4. **Security**: No rate limiting or advanced security measures
+5. **Performance**: No caching or optimization
+
+### Environment Configuration
+```bash
+# Required Environment Variables
+PORT=3000
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+NODE_ENV=production
+HEROKU_APP_URL=your_heroku_app_url
+
+# Development ngrok URL (hardcoded in code)
+# https://7477b4c1d1b3.ngrok-free.app
+```
+
+### Database Schema Reference
+```sql
+-- User Routes Table
+CREATE TABLE public.user_routes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  route_id uuid NOT NULL REFERENCES public.routes(id) ON DELETE CASCADE,
+  status character varying NOT NULL CHECK (status IN ('saved','completed')),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_routes_unique_user_route_status UNIQUE (user_id, route_id, status)
+);
+
+-- Group Ride Tables
+-- Add username to profiles table
+ALTER TABLE public.profiles
+ADD COLUMN username varchar UNIQUE;
+
+-- Group Rides Table (parent entity)
+CREATE TABLE public.group_rides (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  route_id uuid NOT NULL REFERENCES public.routes(id),
+  created_by uuid NOT NULL REFERENCES public.profiles(id),
+  status varchar NOT NULL CHECK (status IN ('active', 'completed', 'cancelled')),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT group_rides_pkey PRIMARY KEY (id)
+);
+
+-- Group Ride Members Table
+CREATE TABLE public.group_ride_members (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  group_ride_id uuid NOT NULL REFERENCES public.group_rides(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  role varchar CHECK (role IN ('leader', 'member')) DEFAULT 'member',
+  joined_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT group_ride_members_pkey PRIMARY KEY (id),
+  CONSTRAINT group_ride_members_unique_user_group UNIQUE (group_ride_id, user_id)
+);
+
+-- Group Ride Invitations Table
+CREATE TABLE public.group_ride_invitations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  group_ride_id uuid NOT NULL REFERENCES public.group_rides(id) ON DELETE CASCADE,
+  sender_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  receiver_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  status varchar NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected')),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT group_ride_invitations_pkey PRIMARY KEY (id),
+  CONSTRAINT group_ride_invitations_unique_group_receiver UNIQUE (group_ride_id, receiver_id)
+);
+
+-- Notifications Table
+CREATE TABLE public.notifications (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  type varchar NOT NULL,
+  message text,
+  related_id uuid,
+  is_read boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT notifications_pkey PRIMARY KEY (id)
+);
+```
+
+## CONCLUSION
+
+This backend system provides a robust foundation for the Yarkib Bike Riding App with comprehensive authentication, route management, user interaction capabilities, and collaborative group riding features. The architecture leverages Supabase for database and authentication while providing a clean REST API interface for frontend applications.
+
+### Key Strengths
+- **Comprehensive Authentication**: OAuth (Google/Apple), Email, and Mobile support
+- **Flexible Route Management**: Advanced search, filtering, and pagination
+- **User Engagement**: Save, complete, and rate routes functionality
+- **Group Ride System**: Complete collaborative riding with invitations and notifications
+- **Admin Panel**: Complete content management system
+- **Mobile-Optimized**: Deep link OAuth flow for mobile apps
+- **Production-Ready**: Proper environment configuration and error handling
+
+### Areas for Improvement
+- **Testing**: Comprehensive test suite (unit, integration, e2e)
+- **Performance**: Caching, rate limiting, and optimization
+- **Security**: Enhanced security measures and input validation
+- **Monitoring**: Advanced logging, metrics, and health checks
+- **Documentation**: Auto-generated API documentation
+- **Deployment**: CI/CD pipeline and automated deployment
+
+### Production Readiness
+The system is **production-ready** with proper environment configuration and can scale with the application's growth through Supabase's managed infrastructure. The migration to the `profiles` table provides better integration with Supabase Auth while maintaining JWT-based security for user routes. The new group ride system adds collaborative functionality that enhances user engagement and social interaction within the cycling community.
+
+### Next Steps for Production
+1. **Create database tables** in Supabase: `user_routes`, `group_rides`, `group_ride_members`, `group_ride_invitations`, `notifications`, and add `username` column to `profiles`
+2. Set up comprehensive testing suite
+3. Implement rate limiting and caching
+4. Add monitoring and alerting
+5. Set up CI/CD pipeline
+6. Configure production environment variables
+7. Implement backup and disaster recovery
