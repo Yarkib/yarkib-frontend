@@ -5,6 +5,10 @@ export interface User {
   avatar?: string;
   date_of_birth?: string;
   fuel_capacity_km?: number;
+  user_metadata?: {
+    full_name?: string;
+    avatar_url?: string;
+  };
 }
 
 export interface Session {
@@ -20,6 +24,7 @@ export interface AuthContextType {
   isAuthenticated: boolean;
   signIn: (provider: string) => Promise<boolean>;
   signOut: () => Promise<void>;
+  logout: () => Promise<void>; // Alias for signOut to maintain compatibility
   emailSignUp: (email: string, password: string, name?: string) => Promise<boolean>;
   emailLogin: (email: string, password: string) => Promise<boolean>;
   storeSession: (session: Session) => Promise<void>;

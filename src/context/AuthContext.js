@@ -628,6 +628,7 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated,
         signIn: handleOAuthSignIn,
         signOut,
+        logout: signOut, // Alias for signOut to maintain compatibility
         emailSignUp: handleEmailSignUp,
         emailLogin: handleEmailLogin,
         showWebView,

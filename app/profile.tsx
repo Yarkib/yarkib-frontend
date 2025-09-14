@@ -1,27 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, TextInput, FlatList, Modal, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/context/AuthContext';
 import { theme } from '../src/theme';
 import RiderCard from '../src/components/RiderCard';
-import { profileApi, userRoutesApi, testBackendConnection } from '../src/utils/api';
+import { getBaseUrl } from '../src/utils/api';
 import { BlurView } from 'expo-blur';
 import { router } from 'expo-router';
 
 const Profile = () => {
-  const { user } = useAuth() as { user: any };
+  const { user, session } = useAuth() as { user: any; session?: { access_token?: string } };
   const [showCard, setShowCard] = React.useState(false);
   const [summary, setSummary] = useState<string>(user?.summary || '');
-  const [savedRoutes, setSavedRoutes] = useState<Array<{id: string; name: string; distance_km: number}>>([]);
-  const [completedRides, setCompletedRides] = useState<Array<{id: string; name: string; distance_km: number}>>([]);
+  const [savedRoutes, setSavedRoutes] = useState<{id: string; name: string; distance_km: number}[]>([]);
+  const [completedRides, setCompletedRides] = useState<{id: string; name: string; distance_km: number}[]>([]);
   const [favouriteCategories, setFavouriteCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-
-  const totalDistance = useMemo(
-    () => completedRides.reduce((acc, r) => acc + (r.distance_km || 0), 0),
-    [completedRides]
-  );
+  const [totalDistance, setTotalDistance] = useState<number>(0);
 
   // Load real profile data
   useEffect(() => {
@@ -31,38 +27,126 @@ const Profile = () => {
         setLoading(true);
         setError(null);
 
-        const [profile, stats, saved, completed] = await Promise.all([
-          profileApi.getUserProfile().catch(() => null),
-          profileApi.getUserStats().catch(() => null),
-          profileApi.getSavedRoutes().catch(() => []),
-          profileApi.getCompletedRides().catch(() => []),
-        ]);
+        if (!user?.id) {
+          console.log('[PROFILE] User not authenticated');
+          setError('Please log in to view profile data');
+          setLoading(false);
+          return;
+        }
+
+        console.log('[PROFILE] Fetching profile data for user:', user.id);
+
+        // Fetch saved routes using direct endpoint
+        const savedRoutesResponse = await fetch(`${getBaseUrl()}/user/routes/saved/${user.id}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+          }
+        });
+
+        // Fetch completed routes using direct endpoint
+        const completedRoutesResponse = await fetch(`${getBaseUrl()}/user/routes/completed/${user.id}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+          }
+        });
+
+        // Fetch user profile data
+        const profileResponse = await fetch(`${getBaseUrl()}/me`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+          }
+        });
+
+        // Fetch user stats for total distance
+        const statsResponse = await fetch(`${getBaseUrl()}/me/stats`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+          }
+        });
 
         if (!isMounted) return;
 
-        if (profile?.summary) setSummary(profile.summary);
-        if (Array.isArray(profile?.favourite_categories)) {
-          setFavouriteCategories(profile.favourite_categories);
+        // Process saved routes
+        let savedRoutesData = [];
+        if (savedRoutesResponse.ok) {
+          const savedData = await savedRoutesResponse.json();
+          savedRoutesData = savedData.routes || savedData || [];
+          console.log(`[PROFILE] Received ${savedRoutesData.length} saved routes`);
+        } else {
+          console.log('[PROFILE] Failed to fetch saved routes:', savedRoutesResponse.status);
         }
 
-        if (stats?.total_distance_km != null) {
-          // Prefer backend’s precomputed if provided
-          // But we still compute from completedRides for display consistency
+        // Process completed routes
+        let completedRoutesData = [];
+        if (completedRoutesResponse.ok) {
+          const completedData = await completedRoutesResponse.json();
+          completedRoutesData = completedData.routes || completedData || [];
+          console.log(`[PROFILE] Received ${completedRoutesData.length} completed routes`);
+        } else {
+          console.log('[PROFILE] Failed to fetch completed routes:', completedRoutesResponse.status);
         }
 
-        setSavedRoutes((saved || []).map((r: any) => ({
+        // Process profile data
+        let profileData = null;
+        if (profileResponse.ok) {
+          profileData = await profileResponse.json();
+          console.log('[PROFILE] Received profile data');
+        } else {
+          console.log('[PROFILE] Failed to fetch profile data:', profileResponse.status);
+        }
+
+        // Process stats data
+        let statsData = null;
+        if (statsResponse.ok) {
+          statsData = await statsResponse.json();
+          console.log('[PROFILE] Received stats data');
+        } else {
+          console.log('[PROFILE] Failed to fetch stats data:', statsResponse.status);
+        }
+
+        // Update state
+        if (profileData?.summary) setSummary(profileData.summary);
+        if (Array.isArray(profileData?.favourite_categories)) {
+          setFavouriteCategories(profileData.favourite_categories);
+        }
+
+        // Set total distance from stats or calculate from completed rides
+        if (statsData?.total_distance_km != null) {
+          setTotalDistance(Number(statsData.total_distance_km));
+          console.log('[PROFILE] Using backend total distance:', statsData.total_distance_km);
+        } else {
+          // Fallback: calculate from completed rides
+          const calculatedDistance = completedRoutesData.reduce((acc: number, r: any) => acc + (r.distance_km || r.distance || 0), 0);
+          setTotalDistance(calculatedDistance);
+          console.log('[PROFILE] Calculated total distance from completed rides:', calculatedDistance);
+        }
+
+        setSavedRoutes(savedRoutesData.map((r: any) => ({
           id: String(r.id || r._id || r.route_id),
-          name: r.name || r.title || 'Route',
+          name: r.name || r.title || r.route_name || 'Route',
           distance_km: Number(r.distance_km || r.distance || 0),
         })));
 
-        setCompletedRides((completed || []).map((c: any) => ({
+        setCompletedRides(completedRoutesData.map((c: any) => ({
           id: String(c.id || c._id || c.ride_id || c.route_id),
           name: c.name || c.title || c.route_name || 'Ride',
           distance_km: Number(c.distance_km || c.distance || 0),
         })));
+
+        setError(null);
       } catch (e) {
-        if (isMounted) setError((e as Error).message);
+        if (isMounted) {
+          console.error('[PROFILE] Error fetching profile data:', e);
+          setError((e as Error).message);
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -70,7 +154,7 @@ const Profile = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [user?.id, session?.access_token]);
 
   const renderSimpleRow = ({ item }: { item: { id: string; name: string; distance_km: number } }) => (
     <View style={styles.itemRow}>
@@ -150,10 +234,29 @@ const Profile = () => {
           <TouchableOpacity
             style={styles.saveBtn}
             onPress={async () => {
+              if (!user?.id) {
+                Alert.alert('Error', 'Please log in to update profile');
+                return;
+              }
+
               try {
                 setError(null);
-                await profileApi.updateUserSummary(summary);
+                const response = await fetch(`${getBaseUrl()}/me/summary`, {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+                  },
+                  body: JSON.stringify({ summary })
+                });
+
+                if (!response.ok) {
+                  throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                Alert.alert('Success', 'Summary updated successfully!');
               } catch (e) {
+                console.error('[PROFILE] Error updating summary:', e);
                 setError((e as Error).message);
               }
             }}
@@ -189,26 +292,6 @@ const Profile = () => {
         <TouchableOpacity style={styles.cardBtn} onPress={() => setShowCard(true)}>
           <Ionicons name="card" size={18} color="white" />
           <Text style={styles.cardBtnText}>Preview Rider Card</Text>
-        </TouchableOpacity>
-
-        {/* Connection Test Button */}
-        <TouchableOpacity 
-          style={styles.connectionTestBtn} 
-          onPress={async () => {
-            try {
-              const result = await testBackendConnection();
-              if (result.success) {
-                Alert.alert('✅ Connection Success', `Backend is reachable!\nResponse time: ${result.responseTime}ms`);
-              } else {
-                Alert.alert('❌ Connection Failed', `Error: ${result.error}\nURL: ${result.baseUrl}`);
-              }
-            } catch (error: any) {
-              Alert.alert('❌ Test Error', error.message || 'Unknown error');
-            }
-          }}
-        >
-          <Ionicons name="wifi" size={16} color="white" />
-          <Text style={styles.connectionTestText}>Test Backend Connection</Text>
         </TouchableOpacity>
 
         {/* User Info Card */}
@@ -269,21 +352,6 @@ const styles = StyleSheet.create({
   cardBtnText: { color: 'white', ...theme.typography.bodyBold },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   modalContent: { width: '100%', borderRadius: 12, overflow: 'hidden' },
-  connectionTestBtn: {
-    marginTop: theme.spacing.md,
-    backgroundColor: theme.colors.primary,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  connectionTestText: {
-    color: 'white',
-    ...theme.typography.bodyBold,
-  },
 });
 
 export default Profile;

@@ -864,3 +864,354 @@ export const testBackendConnection = async () => {
     };
   }
 };
+
+// Group Ride API helpers
+export const groupRideApi = {
+  // Create a new group ride
+  createGroupRide: async (routeId, createdBy) => {
+    try {
+      console.log(`[GROUP RIDE API] Creating group ride for route ${routeId} by user ${createdBy}`);
+      
+      const response = await fetch(`${getBaseUrl()}/group-rides`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          route_id: routeId,
+          created_by: createdBy,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Create failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to create group ride: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[GROUP RIDE API] Group ride created successfully:', data);
+      return data;
+    } catch (error) {
+      console.error('[GROUP RIDE API] Error creating group ride:', error);
+      throw error;
+    }
+  },
+
+  // Invite user to group ride by username
+  inviteUser: async (groupRideId, senderId, receiverUsername) => {
+    try {
+      console.log(`[GROUP RIDE API] Inviting user ${receiverUsername} to group ride ${groupRideId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender_id: senderId,
+          receiver_username: receiverUsername,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Invite failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to invite user: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log(`[GROUP RIDE API] User ${receiverUsername} invited successfully:`, data);
+      return data;
+    } catch (error) {
+      console.error(`[GROUP RIDE API] Error inviting user ${receiverUsername}:`, error);
+      throw error;
+    }
+  },
+
+  // Get group ride details
+  getGroupRideDetails: async (groupRideId) => {
+    try {
+      console.log(`[GROUP RIDE API] Getting details for group ride ${groupRideId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Get details failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to get group ride details: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[GROUP RIDE API] Group ride details retrieved:', data);
+      return data;
+    } catch (error) {
+      console.error('[GROUP RIDE API] Error getting group ride details:', error);
+      throw error;
+    }
+  },
+
+  // Accept group ride invitation
+  acceptInvitation: async (groupRideId, userId) => {
+    try {
+      console.log(`[GROUP RIDE API] User ${userId} accepting invitation to group ride ${groupRideId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Accept failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to accept invitation: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log(`[GROUP RIDE API] User ${userId} accepted invitation successfully:`, data);
+      return data;
+    } catch (error) {
+      console.error(`[GROUP RIDE API] Error accepting invitation:`, error);
+      throw error;
+    }
+  },
+
+  // Reject group ride invitation
+  rejectInvitation: async (groupRideId, userId) => {
+    try {
+      console.log(`[GROUP RIDE API] User ${userId} rejecting invitation to group ride ${groupRideId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/group-rides/${groupRideId}/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Reject failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to reject invitation: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log(`[GROUP RIDE API] User ${userId} rejected invitation successfully:`, data);
+      return data;
+    } catch (error) {
+      console.error(`[GROUP RIDE API] Error rejecting invitation:`, error);
+      throw error;
+    }
+  },
+
+  // Get user's group rides
+  getUserGroupRides: async (userId, options = {}) => {
+    try {
+      const { status = 'active', page = 1, limit = 10 } = options;
+      console.log(`[GROUP RIDE API] Getting group rides for user ${userId}`);
+      
+      const params = new URLSearchParams({
+        status,
+        page: page.toString(),
+        limit: limit.toString(),
+      });
+
+      const response = await fetch(`${getBaseUrl()}/group-rides/user/${userId}?${params}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Get user rides failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to get user group rides: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[GROUP RIDE API] User group rides retrieved:', data);
+      return data;
+    } catch (error) {
+      console.error('[GROUP RIDE API] Error getting user group rides:', error);
+      throw error;
+    }
+  },
+
+  // Search users by query (username or full name)
+  searchUsers: async (query) => {
+    try {
+      console.log(`[GROUP RIDE API] Searching for users with query: ${query}`);
+      
+      // Use the new comprehensive search endpoint that searches both username and full_name
+      const response = await fetch(`${getBaseUrl()}/users/search?q=${encodeURIComponent(query)}&page=1&limit=20`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Search failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to search users: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[GROUP RIDE API] User search results:', data);
+      return data;
+      
+    } catch (error) {
+      console.error('[GROUP RIDE API] Error searching users:', error);
+      throw error;
+    }
+  },
+
+  // Get user profile by username
+  getUserByUsername: async (username) => {
+    try {
+      console.log(`[GROUP RIDE API] Getting user profile by username: ${username}`);
+      
+      const response = await fetch(`${getBaseUrl()}/users/username/${encodeURIComponent(username)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GROUP RIDE API] Get user by username failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to get user by username: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[GROUP RIDE API] User profile by username:', data);
+      return data;
+      
+    } catch (error) {
+      console.error('[GROUP RIDE API] Error getting user by username:', error);
+      throw error;
+    }
+  },
+};
+
+// Notifications API helpers
+export const notificationsApi = {
+  // Get user notifications
+  getUserNotifications: async (userId, options = {}) => {
+    try {
+      const { is_read = false, page = 1, limit = 20 } = options;
+      console.log(`[NOTIFICATIONS API] Getting notifications for user ${userId}`);
+      
+      const params = new URLSearchParams({
+        is_read: is_read.toString(),
+        page: page.toString(),
+        limit: limit.toString(),
+      });
+
+      const response = await fetch(`${getBaseUrl()}/notifications/${userId}?${params}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[NOTIFICATIONS API] Get notifications failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to get notifications: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[NOTIFICATIONS API] Notifications retrieved:', data);
+      return data;
+      
+    } catch (error) {
+      console.error('[NOTIFICATIONS API] Error getting notifications:', error);
+      throw error;
+    }
+  },
+
+  // Mark notification as read
+  markNotificationAsRead: async (notificationId, userId) => {
+    try {
+      console.log(`[NOTIFICATIONS API] Marking notification ${notificationId} as read for user ${userId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[NOTIFICATIONS API] Mark as read failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to mark notification as read: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('[NOTIFICATIONS API] Notification marked as read:', data);
+      return data;
+      
+    } catch (error) {
+      console.error('[NOTIFICATIONS API] Error marking notification as read:', error);
+      throw error;
+    }
+  },
+
+  // Get notification count (unread)
+  getUnreadCount: async (userId) => {
+    try {
+      console.log(`[NOTIFICATIONS API] Getting unread count for user ${userId}`);
+      
+      const response = await fetch(`${getBaseUrl()}/notifications/${userId}?is_read=false&page=1&limit=1`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[NOTIFICATIONS API] Get count failed: ${response.status} - ${errorText}`);
+        throw new Error(`Failed to get notification count: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      // Extract count from pagination or response
+      let count = 0;
+      if (data.pagination && data.pagination.total) {
+        count = data.pagination.total;
+      } else if (Array.isArray(data)) {
+        count = data.length;
+      } else if (data.notifications && Array.isArray(data.notifications)) {
+        count = data.notifications.length;
+      }
+
+      console.log(`[NOTIFICATIONS API] Unread count: ${count}`);
+      return count;
+      
+    } catch (error) {
+      console.error('[NOTIFICATIONS API] Error getting unread count:', error);
+      throw error;
+    }
+  },
+};

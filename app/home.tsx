@@ -22,7 +22,7 @@ import { AuthContextType } from '../src/types/auth';
 import RouteCard from '../src/components/RouteCard';
 import Sidebar from '../src/components/Sidebar';
 import { theme } from '../src/theme/index';
-import { getBaseUrl, MOCK_MODE } from '../src/utils/api';
+import { getBaseUrl, MOCK_MODE, notificationsApi } from '../src/utils/api';
 import { Route } from '../src/types/route';
 import { router } from 'expo-router';
 
@@ -45,6 +45,7 @@ const HomeScreen = () => {
   const [showIntermediateRoutes, setShowIntermediateRoutes] = useState(true);
   const [showHardRoutes, setShowHardRoutes] = useState(true);
   const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [notificationCount, setNotificationCount] = useState(0);
   // Define the Category type for better type safety
   interface Category {
     id: string;
@@ -195,6 +196,24 @@ const HomeScreen = () => {
     fetchRoutes();
   };
 
+  // Fetch notification count
+  const fetchNotificationCount = useCallback(async () => {
+    if (!user?.id) {
+      setNotificationCount(0);
+      return;
+    }
+
+    try {
+      console.log('[HOME] Fetching notification count for user:', user.id);
+      const count = await notificationsApi.getUnreadCount(user.id);
+      setNotificationCount(count);
+      console.log('[HOME] Notification count:', count);
+    } catch (error) {
+      console.error('[HOME] Error fetching notification count:', error);
+      setNotificationCount(0);
+    }
+  }, [user?.id]);
+
   /**
    * Fetch categories from the database using the new /categories endpoint
    * 
@@ -341,6 +360,11 @@ const HomeScreen = () => {
     fetchCategories();
   }, [fetchRoutes, fetchCategories]);
 
+  // Fetch notification count when user changes
+  useEffect(() => {
+    fetchNotificationCount();
+  }, [fetchNotificationCount]);
+
   // Debug effect to log when routes change
   useEffect(() => {
     console.log('[DEBUG] Routes updated:', {
@@ -448,6 +472,23 @@ const HomeScreen = () => {
         </View>
         
         <View style={styles.headerButtons}>
+        <TouchableOpacity
+          style={styles.notificationButton}
+          onPress={() => {
+            console.log('[NOTIFICATIONS] Notification icon pressed');
+            router.push('/notifications');
+          }}
+        >
+          <Ionicons name="notifications-outline" size={24} color={theme.colors.primary} />
+          {/* Notification badge - show count if > 0 */}
+          {notificationCount > 0 && (
+            <View style={styles.notificationBadge}>
+              <Text style={styles.notificationBadgeText}>
+                {notificationCount > 99 ? '99+' : notificationCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
           <TouchableOpacity 
             style={styles.menuButton}
             onPress={() => setSidebarVisible(true)}
@@ -1211,6 +1252,39 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '600',
     fontSize: 14,
+  },
+  notificationButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: theme.colors.inputBackground,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: theme.colors.background,
+  },
+  notificationBadgeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
 

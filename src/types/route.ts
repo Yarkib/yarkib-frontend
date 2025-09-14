@@ -56,6 +56,7 @@ export interface RouteActionState {
 // Route action button props
 export interface RouteActionButtonsProps {
   routeId: string;
+  routeName: string;
   userId: string;
   accessToken: string;
   initialSaved?: boolean;

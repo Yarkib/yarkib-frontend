@@ -5,7 +5,7 @@ const CONFIG = {
   // API Base URLs - Change these based on your environment
   API_URLS: {
     // Development - Using local IP for mobile testing
-    DEVELOPMENT: 'http://192.168.0.102:3000',
+    DEVELOPMENT: 'http://192.168.0.103:3000',
     
     // Production - Update this when you deploy your backend
     PRODUCTION: 'https://7477b4c1d1b3.ngrok-free.app', // TODO: Replace with your actual production URL

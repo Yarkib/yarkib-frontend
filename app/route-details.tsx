@@ -200,6 +200,7 @@ const RouteDetails = () => {
               ) : (
                 <RouteActionButtons
                   routeId={route.id}
+                  routeName={route.name}
                   userId={user.id}
                   accessToken={session.access_token}
                   initialSaved={route.is_saved}

@@ -11,9 +11,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
 import { RouteActionButtonsProps, RouteActionState } from '../types/route';
 import { userRoutesApi } from '../utils/api';
+import GroupRideModal from './GroupRideModal';
 
 const RouteActionButtons: React.FC<RouteActionButtonsProps> = ({
   routeId,
+  routeName,
   userId,
   accessToken,
   initialSaved = false,
@@ -29,6 +31,7 @@ const RouteActionButtons: React.FC<RouteActionButtonsProps> = ({
     savingLoading: false,
     completingLoading: false,
   });
+  const [groupRideModalVisible, setGroupRideModalVisible] = useState(false);
 
   // Update state when initial values change
   useEffect(() => {
@@ -120,6 +123,11 @@ const RouteActionButtons: React.FC<RouteActionButtonsProps> = ({
     }
   };
 
+  const handleGroupRide = () => {
+    console.log(`[ROUTE ACTIONS] Group ride requested for route ${routeId}`);
+    setGroupRideModalVisible(true);
+  };
+
   const isCompact = style === 'compact';
 
   return (
@@ -197,6 +205,37 @@ const RouteActionButtons: React.FC<RouteActionButtonsProps> = ({
           </>
         )}
       </TouchableOpacity>
+
+      {/* Group Ride Button */}
+      <TouchableOpacity
+        style={[
+          styles.button,
+          isCompact && styles.buttonCompact,
+          styles.buttonGroupRide,
+        ]}
+        onPress={handleGroupRide}
+        activeOpacity={0.7}
+      >
+        <Ionicons
+          name="people-outline"
+          size={isCompact ? 16 : 18}
+          color="#FF6B35"
+          style={styles.icon}
+        />
+        {!isCompact && (
+          <Text style={styles.buttonTextGroupRide}>
+            Group Ride
+          </Text>
+        )}
+      </TouchableOpacity>
+
+      {/* Group Ride Modal */}
+      <GroupRideModal
+        visible={groupRideModalVisible}
+        onClose={() => setGroupRideModalVisible(false)}
+        routeId={routeId}
+        routeName={routeName}
+      />
     </View>
   );
 };
@@ -255,6 +294,16 @@ const styles = StyleSheet.create({
   },
   buttonTextCompleted: {
     color: '#FFFFFF',
+  },
+  buttonGroupRide: {
+    backgroundColor: '#FFF5F2',
+    borderColor: '#FF6B35',
+  },
+  buttonTextGroupRide: {
+    ...theme.typography.body,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF6B35',
   },
 });
 
