@@ -26,6 +26,7 @@ interface User {
   name?: string;
   email?: string;
   avatar?: string;
+  invitationStatus?: 'pending' | 'invited' | 'accepted' | 'rejected';
 }
 
 interface GroupRideModalProps {
@@ -45,6 +46,7 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
+  const [invitedUsers, setInvitedUsers] = useState<User[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [sendingInvitations, setSendingInvitations] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -56,6 +58,7 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
       setSearchQuery('');
       setSearchResults([]);
       setSelectedUsers([]);
+      setInvitedUsers([]);
       setSearchError(null);
       setCreatedGroupRideId(null);
     }
@@ -96,11 +99,12 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
         }));
       }
 
-      // Filter out current user and already selected users
+      // Filter out current user, already selected users, and already invited users
       const filteredUsers = users.filter(
         (userData: User) => 
           userData.id !== user?.id && 
-          !selectedUsers.find(selected => selected.id === userData.id)
+          !selectedUsers.find(selected => selected.id === userData.id) &&
+          !invitedUsers.find(invited => invited.id === userData.id)
       );
 
       setSearchResults(filteredUsers);
@@ -113,7 +117,7 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
     } finally {
       setSearchLoading(false);
     }
-  }, [user?.id, selectedUsers]);
+  }, [user?.id, selectedUsers, invitedUsers]);
 
   // Debounced search
   useEffect(() => {
@@ -183,6 +187,11 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
           console.log(`[GROUP RIDE] Inviting ${selectedUser.username} to group ride ${groupRideId}`);
           await groupRideApi.inviteUser(groupRideId, user.id, selectedUser.username);
           console.log(`[GROUP RIDE] Successfully invited ${selectedUser.username}`);
+          
+          // Mark user as invited
+          const invitedUser = { ...selectedUser, invitationStatus: 'invited' as const };
+          setInvitedUsers(prev => [...prev, invitedUser]);
+          
           return { success: true, user: selectedUser };
         } catch (error: any) {
           console.error(`[GROUP RIDE] Error inviting ${selectedUser.username}:`, error);
@@ -201,6 +210,9 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
         const message = failedInvites.length > 0 
           ? `Sent ${successfulInvites.length} invitation${successfulInvites.length > 1 ? 's' : ''} successfully. ${failedInvites.length} failed.`
           : `Successfully sent ${successfulInvites.length} invitation${successfulInvites.length > 1 ? 's' : ''} for the group ride!`;
+        
+        // Clear selected users after successful invitations
+        setSelectedUsers([]);
         
         Alert.alert(
           'Group Ride Created!',
@@ -234,28 +246,43 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
     }
   };
 
-  const renderSearchResult = ({ item }: { item: User }) => (
-    <TouchableOpacity
-      style={styles.searchResultItem}
-      onPress={() => selectUser(item)}
-      activeOpacity={0.7}
-    >
-      <View style={styles.userInfo}>
-        <View style={styles.avatarContainer}>
-          {item.avatar ? (
-            <Image source={{ uri: item.avatar }} style={styles.avatar} />
-          ) : (
-            <Ionicons name="person-circle-outline" size={40} color={theme.colors.textSecondary} />
-          )}
+  const renderSearchResult = ({ item }: { item: User }) => {
+    const isInvited = invitedUsers.find(invited => invited.id === item.id);
+    
+    return (
+      <TouchableOpacity
+        style={[
+          styles.searchResultItem,
+          isInvited && styles.searchResultItemInvited
+        ]}
+        onPress={() => !isInvited && selectUser(item)}
+        activeOpacity={isInvited ? 1 : 0.7}
+        disabled={!!isInvited}
+      >
+        <View style={styles.userInfo}>
+          <View style={styles.avatarContainer}>
+            {item.avatar ? (
+              <Image source={{ uri: item.avatar }} style={styles.avatar} />
+            ) : (
+              <Ionicons name="person-circle-outline" size={40} color={theme.colors.textSecondary} />
+            )}
+          </View>
+          <View style={styles.userDetails}>
+            <Text style={[styles.username, isInvited && styles.usernameInvited]}>{item.username}</Text>
+            {item.name && <Text style={[styles.userName, isInvited && styles.userNameInvited]}>{item.name}</Text>}
+          </View>
         </View>
-        <View style={styles.userDetails}>
-          <Text style={styles.username}>{item.username}</Text>
-          {item.name && <Text style={styles.userName}>{item.name}</Text>}
-        </View>
-      </View>
-      <Ionicons name="add-circle-outline" size={24} color={theme.colors.primary} />
-    </TouchableOpacity>
-  );
+        {isInvited ? (
+          <View style={styles.invitedBadge}>
+            <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+            <Text style={styles.invitedText}>Invited</Text>
+          </View>
+        ) : (
+          <Ionicons name="add-circle-outline" size={24} color={theme.colors.primary} />
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   const renderSelectedUser = ({ item }: { item: User }) => (
     <View style={styles.selectedUserItem}>
@@ -276,6 +303,25 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
       >
         <Ionicons name="close-circle" size={24} color="#EF4444" />
       </TouchableOpacity>
+    </View>
+  );
+
+  const renderInvitedUser = ({ item }: { item: User }) => (
+    <View style={styles.invitedUserItem}>
+      <View style={styles.invitedUserInfo}>
+        <View style={styles.avatarContainer}>
+          {item.avatar ? (
+            <Image source={{ uri: item.avatar }} style={styles.avatar} />
+          ) : (
+            <Ionicons name="person-circle-outline" size={32} color={theme.colors.textSecondary} />
+          )}
+        </View>
+        <Text style={styles.invitedUsername}>{item.username}</Text>
+      </View>
+      <View style={styles.invitedStatusBadge}>
+        <Ionicons name="checkmark-circle" size={20} color="#34C759" />
+        <Text style={styles.invitedStatusText}>Invited</Text>
+      </View>
     </View>
   );
 
@@ -375,6 +421,23 @@ const GroupRideModal: React.FC<GroupRideModalProps> = ({
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 style={styles.selectedUsersList}
+              />
+            </View>
+          )}
+
+          {/* Invited Users */}
+          {invitedUsers.length > 0 && (
+            <View style={styles.invitedSection}>
+              <Text style={styles.sectionTitle}>
+                Invited Users ({invitedUsers.length})
+              </Text>
+              <FlatList
+                data={invitedUsers}
+                renderItem={renderInvitedUser}
+                keyExtractor={(item) => item.id}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.invitedUsersList}
               />
             </View>
           )}
@@ -539,6 +602,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
+  searchResultItemInvited: {
+    backgroundColor: '#34C759' + '10',
+    borderColor: '#34C759' + '30',
+    opacity: 0.8,
+  },
   userInfo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -566,6 +634,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.textSecondary,
     marginTop: 2,
+  },
+  usernameInvited: {
+    color: theme.colors.textSecondary,
+  },
+  userNameInvited: {
+    color: theme.colors.textSecondary,
+    opacity: 0.7,
+  },
+  invitedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  invitedText: {
+    ...theme.typography.body,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#34C759',
   },
   selectedSection: {
     paddingHorizontal: theme.spacing.lg,
@@ -598,6 +684,46 @@ const styles = StyleSheet.create({
   },
   removeButton: {
     padding: theme.spacing.xs,
+  },
+  invitedSection: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.lg,
+  },
+  invitedUsersList: {
+    marginTop: theme.spacing.sm,
+  },
+  invitedUserItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#34C759' + '15',
+    borderRadius: theme.borderRadius.md,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    marginRight: theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: '#34C759' + '30',
+  },
+  invitedUserInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: theme.spacing.sm,
+  },
+  invitedUsername: {
+    ...theme.typography.body,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#34C759',
+  },
+  invitedStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
+  invitedStatusText: {
+    ...theme.typography.body,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#34C759',
   },
   groupRideIdContainer: {
     flexDirection: 'row',

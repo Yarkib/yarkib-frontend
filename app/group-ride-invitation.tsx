@@ -15,7 +15,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 import { theme } from '../src/theme';
-import { groupRideApi } from '../src/utils/api';
+import { getBaseUrl } from '../src/utils/api';
 
 interface GroupRideInvitation {
   id: string;
@@ -88,8 +88,29 @@ const GroupRideInvitationScreen = () => {
     try {
       setResponding(true);
       console.log('[INVITATION] Accepting invitation for group ride:', invitation.group_ride_id);
+      console.log('[INVITATION] User ID:', user.id);
 
-      await groupRideApi.acceptInvitation(invitation.group_ride_id, user.id);
+      // Call the backend accept endpoint directly
+      const response = await fetch(`${getBaseUrl()}/group-rides/${invitation.group_ride_id}/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: user.id
+        })
+      });
+
+      console.log('[INVITATION] Accept response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[INVITATION] Accept failed:', response.status, errorText);
+        throw new Error(`Failed to accept invitation: ${response.status} - ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('[INVITATION] Accept result:', result);
 
       // Show success state
       setAccepted(true);
@@ -113,47 +134,44 @@ const GroupRideInvitationScreen = () => {
       return;
     }
 
-    Alert.alert(
-      'Reject Invitation',
-      'Are you sure you want to decline this group ride invitation?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reject',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setResponding(true);
-              console.log('[INVITATION] Rejecting invitation for group ride:', invitation.group_ride_id);
-              console.log('[INVITATION] User ID:', user.id);
-              console.log('[INVITATION] Full invitation data:', invitation);
+    try {
+      setResponding(true);
+      console.log('[INVITATION] Rejecting invitation for group ride:', invitation.group_ride_id);
 
-              const result = await groupRideApi.rejectInvitation(invitation.group_ride_id, user.id);
-              console.log('[INVITATION] Reject result:', result);
-
-              // Show success state
-              setRejected(true);
-              
-              // Auto-navigate to home after 2 seconds
-              setTimeout(() => {
-                router.replace('/home');
-              }, 2000);
-            } catch (error: any) {
-              console.error('[INVITATION] Error rejecting invitation:', error);
-              console.error('[INVITATION] Error details:', {
-                message: error.message,
-                stack: error.stack,
-                invitation: invitation,
-                userId: user.id
-              });
-              Alert.alert('Error', `Failed to reject invitation: ${error.message}`);
-            } finally {
-              setResponding(false);
-            }
-          },
+      // Call the backend reject endpoint directly
+      const response = await fetch(`${getBaseUrl()}/group-rides/${invitation.group_ride_id}/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      ]
-    );
+        body: JSON.stringify({
+          user_id: user.id
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[INVITATION] Reject failed:', response.status, errorText);
+        Alert.alert('Error', `Failed to reject invitation: ${response.status} - ${errorText}`);
+        return;
+      }
+
+      const result = await response.json();
+      console.log('[INVITATION] Reject result:', result);
+
+      // Show success state
+      setRejected(true);
+      
+      // Auto-navigate to home after 2 seconds
+      setTimeout(() => {
+        router.replace('/home');
+      }, 2000);
+    } catch (error: any) {
+      console.error('[INVITATION] Error rejecting invitation:', error);
+      Alert.alert('Error', `Failed to reject invitation: ${error.message}`);
+    } finally {
+      setResponding(false);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -217,7 +235,7 @@ const GroupRideInvitationScreen = () => {
           <Ionicons name="checkmark-circle" size={80} color="#34C759" />
           <Text style={styles.successTitle}>Invitation Accepted!</Text>
           <Text style={styles.successMessage}>
-            You've successfully joined the group ride "{invitation.group_ride?.routes?.name || 'Unknown Route'}".
+            You&apos;ve successfully joined the group ride &quot;{invitation.group_ride?.routes?.name || 'Unknown Route'}&quot;.
           </Text>
           <Text style={styles.redirectText}>Returning to home...</Text>
         </View>
@@ -387,6 +405,7 @@ const GroupRideInvitationScreen = () => {
           style={[styles.actionButton, styles.rejectButton]}
           onPress={handleReject}
           disabled={responding}
+          activeOpacity={0.7}
         >
           <Ionicons name="close" size={20} color="#FFFFFF" />
           <Text style={styles.rejectButtonText}>
@@ -502,7 +521,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   invitationCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginTop: theme.spacing.lg,
@@ -527,7 +546,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   routeCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.md,
@@ -610,7 +629,7 @@ const styles = StyleSheet.create({
     marginHorizontal: theme.spacing.sm,
   },
   creatorCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.md,
@@ -656,7 +675,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   detailsCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.xl,
