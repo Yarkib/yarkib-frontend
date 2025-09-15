@@ -29,4 +29,9 @@ export interface AuthContextType {
   emailLogin: (email: string, password: string) => Promise<boolean>;
   storeSession: (session: Session) => Promise<void>;
   clearSession: () => Promise<void>;
+  // OAuth WebView properties
+  showWebView: boolean;
+  oauthUrl: string | null;
+  handleWebViewMessage: (event: any) => Promise<void>;
+  closeWebView: () => void;
 }

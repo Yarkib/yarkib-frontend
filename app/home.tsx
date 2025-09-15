@@ -338,17 +338,26 @@ const HomeScreen = () => {
   };
 
   const handleSidebarNavigation = (screen: string) => {
+    console.log('[HOME] Sidebar navigation triggered for:', screen);
     switch (screen) {
       case 'profile':
+        console.log('[HOME] Navigating to profile');
         router.push('/profile');
         break;
       case 'saved':
+        console.log('[HOME] Navigating to saved routes');
         router.push('/saved-routes');
         break;
       case 'completed':
+        console.log('[HOME] Navigating to completed routes');
         router.push('/completed-routes');
         break;
+      case 'group-rides':
+        console.log('[HOME] Navigating to group rides');
+        router.push('/group-rides');
+        break;
       default:
+        console.log('[HOME] Unknown navigation target:', screen);
         break;
     }
   };
@@ -489,12 +498,23 @@ const HomeScreen = () => {
             </View>
           )}
         </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.menuButton}
-            onPress={() => setSidebarVisible(true)}
-          >
-            <Ionicons name="menu" size={24} color={theme.colors.primary} />
-          </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={() => setSidebarVisible(true)}
+        >
+          <Ionicons name="menu" size={24} color={theme.colors.primary} />
+        </TouchableOpacity>
+        
+        {/* Temporary test button for group rides */}
+        <TouchableOpacity
+          style={[styles.menuButton, { marginLeft: 10, backgroundColor: theme.colors.primary }]}
+          onPress={() => {
+            console.log('[HOME] Direct navigation to group rides');
+            router.push('/group-rides');
+          }}
+        >
+          <Ionicons name="people" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
           <TouchableOpacity 
             style={styles.showAllButton}
             onPress={() => {

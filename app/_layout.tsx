@@ -8,6 +8,7 @@ import * as Linking from 'expo-linking';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
+import { AuthContextType } from '../src/types/auth';
 import OAuthWebView from '../src/components/OAuthWebView';
 
 export default function RootLayout() {
@@ -74,6 +75,12 @@ export default function RootLayout() {
           <Stack.Screen name="signup" options={{ headerShown: false }} />
           <Stack.Screen name="complete-signup" options={{ headerShown: false }} />
           <Stack.Screen name="home" options={{ headerShown: false }} />
+          <Stack.Screen name="notifications" options={{ headerShown: false }} />
+          <Stack.Screen name="group-rides" options={{ headerShown: false }} />
+          <Stack.Screen name="group-ride-status" options={{ headerShown: false }} />
+          <Stack.Screen name="group-ride-invitation" options={{ headerShown: false }} />
+          <Stack.Screen name="group-ride-details" options={{ headerShown: false }} />
+          <Stack.Screen name="group-ride-invite" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>
@@ -86,7 +93,7 @@ export default function RootLayout() {
 
 // Wrapper component to access auth context
 function OAuthWebViewWrapper() {
-  const { showWebView, oauthUrl, handleWebViewMessage, closeWebView } = useAuth();
+  const { showWebView, oauthUrl, handleWebViewMessage, closeWebView } = useAuth() as AuthContextType;
   
   return (
     <OAuthWebView

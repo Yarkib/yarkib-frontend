@@ -1044,7 +1044,12 @@ export const groupRideApi = {
         limit: limit.toString(),
       });
 
-      const response = await fetch(`${getBaseUrl()}/group-rides/user/${userId}?${params}`, {
+      const url = `${getBaseUrl()}/group-rides/user/${userId}?${params}`;
+      console.log('[GROUP RIDE API] Requesting URL:', url);
+      console.log('[GROUP RIDE API] User ID:', userId);
+      console.log('[GROUP RIDE API] Params:', params.toString());
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -1058,7 +1063,10 @@ export const groupRideApi = {
       }
 
       const data = await response.json();
-      console.log('[GROUP RIDE API] User group rides retrieved:', data);
+      console.log('[GROUP RIDE API] User group rides retrieved:', JSON.stringify(data, null, 2));
+      console.log('[GROUP RIDE API] Response type:', typeof data);
+      console.log('[GROUP RIDE API] Is array:', Array.isArray(data));
+      console.log('[GROUP RIDE API] Response keys:', data ? Object.keys(data) : 'null');
       return data;
     } catch (error) {
       console.error('[GROUP RIDE API] Error getting user group rides:', error);
@@ -1201,7 +1209,12 @@ export const notificationsApi = {
     try {
       console.log(`[NOTIFICATIONS API] Getting unread count for user ${userId}`);
       
-      const response = await fetch(`${getBaseUrl()}/notifications/${userId}?is_read=false&page=1&limit=1`, {
+      // Since the backend is not properly filtering by is_read=false, 
+      // we'll fetch all notifications and filter on the frontend
+      const url = `${getBaseUrl()}/notifications/${userId}?page=1&limit=100`;
+      console.log(`[NOTIFICATIONS API] Requesting URL: ${url}`);
+      
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -1215,18 +1228,27 @@ export const notificationsApi = {
       }
 
       const data = await response.json();
+      console.log(`[NOTIFICATIONS API] Raw response data:`, JSON.stringify(data, null, 2));
       
-      // Extract count from pagination or response
-      let count = 0;
-      if (data.pagination && data.pagination.total) {
-        count = data.pagination.total;
-      } else if (Array.isArray(data)) {
-        count = data.length;
+      // Extract notifications from response
+      let notificationsData = [];
+      if (Array.isArray(data)) {
+        notificationsData = data;
       } else if (data.notifications && Array.isArray(data.notifications)) {
-        count = data.notifications.length;
+        notificationsData = data.notifications;
+      } else if (data.data && Array.isArray(data.data)) {
+        notificationsData = data.data;
       }
-
-      console.log(`[NOTIFICATIONS API] Unread count: ${count}`);
+      
+      // Filter to only unread notifications (is_read === false or is_read === 0)
+      const unreadNotifications = notificationsData.filter(notification => 
+        notification.is_read === false || notification.is_read === 0
+      );
+      
+      const count = unreadNotifications.length;
+      console.log(`[NOTIFICATIONS API] Total notifications: ${notificationsData.length}, Unread: ${count}`);
+      console.log(`[NOTIFICATIONS API] Unread notification IDs:`, unreadNotifications.map(n => n.id));
+      
       return count;
       
     } catch (error) {

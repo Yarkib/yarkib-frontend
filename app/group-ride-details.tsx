@@ -60,7 +60,10 @@ interface GroupRideDetails {
 }
 
 const GroupRideDetailsScreen = () => {
-  const { groupRideData } = useLocalSearchParams<{ groupRideData: string }>();
+  const { groupRideData, groupRideId } = useLocalSearchParams<{ 
+    groupRideData: string; 
+    groupRideId: string; 
+  }>();
   const { user } = useAuth() as AuthContextType;
   
   const [groupRide, setGroupRide] = useState<GroupRideDetails | null>(null);
@@ -69,18 +72,40 @@ const GroupRideDetailsScreen = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (groupRideData) {
+    const loadGroupRide = async () => {
       try {
-        const parsedGroupRide = JSON.parse(groupRideData);
-        setGroupRide(parsedGroupRide);
-        console.log('[GROUP RIDE] Loaded group ride:', parsedGroupRide);
+        setLoading(true);
+        setError(null);
+
+        if (groupRideData) {
+          // Use passed data if available
+          try {
+            const parsedGroupRide = JSON.parse(groupRideData);
+            setGroupRide(parsedGroupRide);
+            console.log('[GROUP RIDE] Loaded group ride from params:', parsedGroupRide);
+          } catch (error) {
+            console.error('[GROUP RIDE] Error parsing group ride data:', error);
+            throw new Error('Invalid group ride data');
+          }
+        } else if (groupRideId) {
+          // Fetch from API if only ID is provided
+          console.log('[GROUP RIDE] Fetching group ride details for ID:', groupRideId);
+          const fetchedGroupRide = await groupRideApi.getGroupRideDetails(groupRideId);
+          setGroupRide(fetchedGroupRide);
+          console.log('[GROUP RIDE] Loaded group ride from API:', fetchedGroupRide);
+        } else {
+          throw new Error('No group ride data or ID provided');
+        }
       } catch (error) {
-        console.error('[GROUP RIDE] Error parsing group ride data:', error);
-        setError('Invalid group ride data');
+        console.error('[GROUP RIDE] Error loading group ride:', error);
+        setError(error instanceof Error ? error.message : 'Failed to load group ride');
+      } finally {
+        setLoading(false);
       }
-    }
-    setLoading(false);
-  }, [groupRideData]);
+    };
+
+    loadGroupRide();
+  }, [groupRideData, groupRideId]);
 
   const refreshGroupRide = async () => {
     if (!groupRide?.id) return;

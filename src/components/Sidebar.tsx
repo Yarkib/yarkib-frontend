@@ -79,6 +79,16 @@ const Sidebar: React.FC<SidebarProps> = ({ isVisible, onClose, onNavigate }) => 
       },
     },
     {
+      id: 'group-rides',
+      title: 'Group Rides',
+      icon: 'people-outline',
+      onPress: () => {
+        console.log('[SIDEBAR] Group Rides menu item pressed');
+        onNavigate('group-rides');
+        onClose();
+      },
+    },
+    {
       id: 'logout',
       title: 'Logout',
       icon: 'log-out-outline',

@@ -186,11 +186,12 @@ const NotificationsScreen = () => {
           const groupRideDetails = await groupRideApi.getGroupRideDetails(notification.related_id);
           console.log('[NOTIFICATIONS] Successfully fetched group ride details:', groupRideDetails);
           
-          // Navigate to group ride details screen
+          // Navigate to group ride status screen
           router.push({
-            pathname: '/group-ride-details',
+            pathname: '/group-ride-status',
             params: {
               groupRideData: JSON.stringify(groupRideDetails),
+              source: 'notifications',
             },
           });
         } catch (error: any) {
@@ -219,8 +220,50 @@ const NotificationsScreen = () => {
         break;
       case 'group_ride_rejected':
         console.log('[NOTIFICATIONS] Group ride rejected notification pressed:', notification.related_id);
-        // For rejected invitations, just show an alert or do nothing
-        Alert.alert('Group Ride Update', notification.message || 'Someone declined your group ride invitation.');
+        try {
+          // Validate that we have a related_id
+          if (!notification.related_id) {
+            console.error('[NOTIFICATIONS] No related_id found in notification:', notification);
+            Alert.alert('Error', 'Invalid notification: Missing group ride ID');
+            return;
+          }
+
+          // Fetch group ride details
+          console.log('[NOTIFICATIONS] Attempting to fetch group ride details for ID:', notification.related_id);
+          const groupRideDetails = await groupRideApi.getGroupRideDetails(notification.related_id);
+          console.log('[NOTIFICATIONS] Successfully fetched group ride details:', groupRideDetails);
+          
+          // Navigate to group ride status screen
+          router.push({
+            pathname: '/group-ride-status',
+            params: {
+              groupRideData: JSON.stringify(groupRideDetails),
+              source: 'notifications',
+            },
+          });
+        } catch (error: any) {
+          console.error('[NOTIFICATIONS] Error fetching group ride details:', error);
+          
+          // Check if it's a 404 error (group ride not found)
+          if (error.message && error.message.includes('404')) {
+            Alert.alert(
+              'Group Ride Not Found',
+              'This group ride is no longer available. It may have been cancelled or deleted.',
+              [
+                {
+                  text: 'Mark as Read',
+                  onPress: () => markAsRead(notification.id),
+                },
+                {
+                  text: 'OK',
+                  style: 'default',
+                },
+              ]
+            );
+          } else {
+            Alert.alert('Error', `Failed to load group ride details: ${error.message}`);
+          }
+        }
         break;
       default:
         console.log('[NOTIFICATIONS] Generic notification pressed:', notification.type);
@@ -340,7 +383,7 @@ const NotificationsScreen = () => {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => router.replace('/home')}
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
@@ -375,7 +418,7 @@ const NotificationsScreen = () => {
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => router.replace('/home')}
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
@@ -413,7 +456,7 @@ const NotificationsScreen = () => {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={() => router.replace('/home')}
         >
           <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
