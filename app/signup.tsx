@@ -14,6 +14,7 @@ import { router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import AuthButton from '../src/components/AuthButton';
 import { theme } from '../src/theme';
+import { getBaseUrl } from '../src/utils/api';
 
 const SignupScreen = () => {
   const { signIn, emailSignUp } = useAuth();
@@ -21,13 +22,94 @@ const SignupScreen = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState(null);
+  const [checkingUsername, setCheckingUsername] = useState(false);
+
+  // Username validation function
+  const validateUsername = (username) => {
+    if (!username || username.trim().length < 3) {
+      return 'Username must be at least 3 characters long';
+    }
+    if (username.length > 20) {
+      return 'Username must be 20 characters or less';
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return 'Username can only contain letters, numbers, and underscores';
+    }
+    return null;
+  };
+
+  // Check username availability
+  const checkUsernameAvailability = async (username) => {
+    const validationError = validateUsername(username);
+    if (validationError) {
+      setUsernameAvailable(false);
+      return;
+    }
+
+    setCheckingUsername(true);
+    try {
+      const response = await fetch(`${getBaseUrl()}/auth/username/check/${encodeURIComponent(username)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUsernameAvailable(data.available);
+      } else {
+        setUsernameAvailable(false);
+      }
+    } catch (error) {
+      console.error('Error checking username availability:', error);
+      setUsernameAvailable(false);
+    } finally {
+      setCheckingUsername(false);
+    }
+  };
+
+  // Debounced username check
+  const debouncedUsernameCheck = (() => {
+    let timeoutId;
+    return (username) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (username.trim()) {
+          checkUsernameAvailability(username);
+        } else {
+          setUsernameAvailable(null);
+        }
+      }, 500);
+    };
+  })();
 
   const handleEmailSignUp = async () => {
     // Validate inputs
     if (!email.trim()) {
       Alert.alert('Error', 'Please enter your email');
+      return;
+    }
+
+    if (!username.trim()) {
+      Alert.alert('Error', 'Please enter a username');
+      return;
+    }
+
+    // Validate username format
+    const usernameError = validateUsername(username);
+    if (usernameError) {
+      Alert.alert('Error', usernameError);
+      return;
+    }
+
+    // Check if username is available
+    if (usernameAvailable === false) {
+      Alert.alert('Error', 'Username is not available. Please choose a different username.');
       return;
     }
 
@@ -43,7 +125,7 @@ const SignupScreen = () => {
 
     try {
       setLoading(true);
-      await emailSignUp(email, password, name);
+      await emailSignUp(email, password, name, username);
       // Note: The emailSignUp function handles navigation and error alerts
     } catch (error) {
       console.error('Email signup error:', error);
@@ -82,6 +164,38 @@ const SignupScreen = () => {
             onChangeText={setName}
             autoCapitalize="words"
           />
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Username *</Text>
+          <View style={styles.usernameContainer}>
+            <TextInput
+              style={[styles.input, styles.usernameInput]}
+              placeholder="Enter your username"
+              value={username}
+              onChangeText={(text) => {
+                setUsername(text);
+                debouncedUsernameCheck(text);
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {checkingUsername && (
+              <ActivityIndicator size="small" color={theme.colors.primary} style={styles.usernameLoader} />
+            )}
+            {usernameAvailable === true && (
+              <Ionicons name="checkmark-circle" size={20} color="#34C759" style={styles.usernameIcon} />
+            )}
+            {usernameAvailable === false && (
+              <Ionicons name="close-circle" size={20} color="#FF3B30" style={styles.usernameIcon} />
+            )}
+          </View>
+          {username && usernameAvailable === false && (
+            <Text style={styles.errorText}>Username is not available</Text>
+          )}
+          {username && usernameAvailable === true && (
+            <Text style={styles.successText}>Username is available</Text>
+          )}
         </View>
 
         <View style={styles.inputContainer}>
@@ -219,6 +333,33 @@ const styles = StyleSheet.create({
     borderRadius: theme.borderRadius.sm,
     padding: theme.spacing.md,
     fontSize: 16,
+  },
+  usernameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: theme.borderRadius.sm,
+  },
+  usernameInput: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    paddingRight: theme.spacing.sm,
+  },
+  usernameLoader: {
+    marginRight: theme.spacing.sm,
+  },
+  usernameIcon: {
+    marginRight: theme.spacing.sm,
+  },
+  errorText: {
+    color: '#FF3B30',
+    fontSize: 12,
+    marginTop: theme.spacing.xs,
+  },
+  successText: {
+    color: '#34C759',
+    fontSize: 12,
+    marginTop: theme.spacing.xs,
   },
   passwordContainer: {
     flexDirection: 'row',

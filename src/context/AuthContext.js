@@ -282,7 +282,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
   
-  const handleEmailSignUp = async (email, password, name) => {
+  const handleEmailSignUp = async (email, password, name, username) => {
     try {
       console.log(`[AUTH] Starting email signup for ${email}...`);
       
@@ -297,7 +297,8 @@ export const AuthProvider = ({ children }) => {
             user: {
               id: 'mock-user-id',
               email: email,
-              name: name || 'Mock User'
+              name: name || 'Mock User',
+              username: username || 'mockuser'
             }
           };
           
@@ -318,7 +319,8 @@ export const AuthProvider = ({ children }) => {
       const userData = {
         email,
         password,
-        name
+        name,
+        username
       };
       
       try {
@@ -340,7 +342,11 @@ export const AuthProvider = ({ children }) => {
           // Navigate to home screen after successful authentication
           router.replace('/home');
           return true;
-        } else if (response && response.message === 'Email verification required') {
+        } else if (response && (
+          response.message === 'Email verification required' ||
+          response.message === 'Registration successful. Please check your email to confirm your account.' ||
+          (response.message && response.message.includes('check your email'))
+        )) {
           // For email signup that requires verification
           console.log('[AUTH] Signup successful, showing email confirmation notice');
           // Clear any temporary session data

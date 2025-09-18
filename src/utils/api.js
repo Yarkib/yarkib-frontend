@@ -304,7 +304,8 @@ export const authApi = {
             user: {
               id: 'mock-user-id',
               email: userData.email,
-              name: userData.name || 'Rider'
+              name: userData.name || 'Rider',
+              username: userData.username || 'rider'
             }
           }
         };

@@ -23,6 +23,7 @@ interface User {
   username: string;
   full_name?: string;
   avatar_url?: string;
+  email?: string;
 }
 
 interface GroupRide {
@@ -66,6 +67,7 @@ const GroupRideInviteScreen = () => {
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [inviting, setInviting] = useState<string | null>(null);
+  const [searchType, setSearchType] = useState<'username' | 'email'>('username');
 
   useEffect(() => {
     if (groupRideData) {
@@ -87,12 +89,25 @@ const GroupRideInviteScreen = () => {
 
     setSearching(true);
     try {
-      const response = await fetch(`${getBaseUrl()}/users/search?q=${encodeURIComponent(query)}&page=1&limit=20`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      let response;
+      
+      if (searchType === 'email') {
+        // Search by email using the new email search endpoint
+        response = await fetch(`${getBaseUrl()}/users/search/email?email=${encodeURIComponent(query)}&page=1&limit=20`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+      } else {
+        // Search by username/name using the existing endpoint
+        response = await fetch(`${getBaseUrl()}/users/search?q=${encodeURIComponent(query)}&page=1&limit=20`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+      }
 
       if (response.ok) {
         const data = await response.json();
@@ -112,10 +127,12 @@ const GroupRideInviteScreen = () => {
         );
         
         setSearchResults(filteredUsers);
-        console.log('[GROUP RIDE INVITE] Search results:', filteredUsers);
+        console.log(`[GROUP RIDE INVITE] ${searchType} search results:`, filteredUsers);
+      } else {
+        console.error(`[GROUP RIDE INVITE] ${searchType} search failed:`, response.status);
       }
     } catch (error) {
-      console.error('[GROUP RIDE INVITE] Error searching users:', error);
+      console.error(`[GROUP RIDE INVITE] Error searching users by ${searchType}:`, error);
     } finally {
       setSearching(false);
     }
@@ -189,7 +206,11 @@ const GroupRideInviteScreen = () => {
           <Text style={styles.userName}>
             {item.full_name || item.username}
           </Text>
-          <Text style={styles.userUsername}>@{item.username}</Text>
+          {searchType === 'email' && item.email ? (
+            <Text style={styles.userEmail}>{item.email}</Text>
+          ) : (
+            <Text style={styles.userUsername}>@{item.username}</Text>
+          )}
         </View>
       </View>
       <TouchableOpacity
@@ -238,14 +259,68 @@ const GroupRideInviteScreen = () => {
         {/* Search Section */}
         <View style={styles.searchCard}>
           <Text style={styles.searchTitle}>Search for riders to invite</Text>
+          
+          {/* Search Type Toggle */}
+          <View style={styles.searchTypeToggle}>
+            <TouchableOpacity
+              style={[
+                styles.searchTypeButton,
+                searchType === 'username' && styles.searchTypeButtonActive
+              ]}
+              onPress={() => {
+                setSearchType('username');
+                setSearchQuery('');
+                setSearchResults([]);
+              }}
+            >
+              <Ionicons 
+                name="person" 
+                size={16} 
+                color={searchType === 'username' ? '#FFFFFF' : theme.colors.textSecondary} 
+              />
+              <Text style={[
+                styles.searchTypeButtonText,
+                searchType === 'username' && styles.searchTypeButtonTextActive
+              ]}>
+                Username
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.searchTypeButton,
+                searchType === 'email' && styles.searchTypeButtonActive
+              ]}
+              onPress={() => {
+                setSearchType('email');
+                setSearchQuery('');
+                setSearchResults([]);
+              }}
+            >
+              <Ionicons 
+                name="mail" 
+                size={16} 
+                color={searchType === 'email' ? '#FFFFFF' : theme.colors.textSecondary} 
+              />
+              <Text style={[
+                styles.searchTypeButtonText,
+                searchType === 'email' && styles.searchTypeButtonTextActive
+              ]}>
+                Email
+              </Text>
+            </TouchableOpacity>
+          </View>
+          
           <View style={styles.searchContainer}>
             <Ionicons name="search" size={20} color={theme.colors.textSecondary} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search by username or name..."
+              placeholder={searchType === 'email' ? 'Search by email address...' : 'Search by username or name...'}
               value={searchQuery}
               onChangeText={handleSearchChange}
               placeholderTextColor={theme.colors.textSecondary}
+              keyboardType={searchType === 'email' ? 'email-address' : 'default'}
+              autoCapitalize={searchType === 'email' ? 'none' : 'words'}
             />
             {searching && (
               <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -284,8 +359,9 @@ const GroupRideInviteScreen = () => {
           <View style={styles.instructionsText}>
             <Text style={styles.instructionsTitle}>How to invite riders</Text>
             <Text style={styles.instructionsBody}>
-              Search for users by their username or full name. Once you find someone you want to invite, 
-              tap the "Invite" button to send them a group ride invitation.
+              Search for users by their username, full name, or email address. Toggle between search types 
+              using the buttons above. Once you find someone you want to invite, tap the "Invite" button 
+              to send them a group ride invitation.
             </Text>
           </View>
         </View>
@@ -358,6 +434,35 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     marginBottom: theme.spacing.md,
   },
+  searchTypeToggle: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.inputBackground,
+    borderRadius: theme.borderRadius.sm,
+    padding: 4,
+    marginBottom: theme.spacing.md,
+  },
+  searchTypeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    borderRadius: theme.borderRadius.sm,
+  },
+  searchTypeButtonActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  searchTypeButtonText: {
+    ...theme.typography.body,
+    fontSize: 14,
+    fontWeight: '500',
+    color: theme.colors.textSecondary,
+    marginLeft: theme.spacing.xs,
+  },
+  searchTypeButtonTextActive: {
+    color: '#FFFFFF',
+  },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -429,6 +534,12 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginTop: 2,
   },
+  userEmail: {
+    ...theme.typography.body,
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
+  },
   inviteButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -490,4 +601,5 @@ const styles = StyleSheet.create({
 });
 
 export default GroupRideInviteScreen;
+
 
