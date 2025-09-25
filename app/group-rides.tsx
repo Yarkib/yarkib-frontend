@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   SafeAreaView,
+  ScrollView,
   ActivityIndicator,
   Alert,
   Image,
@@ -16,7 +17,7 @@ import { router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 import { theme } from '../src/theme';
-import { groupRideApi } from '../src/utils/api';
+import { getBaseUrl } from '../src/utils/api';
 
 interface GroupRide {
   id: string;
@@ -24,51 +25,44 @@ interface GroupRide {
   created_by: string;
   status: string;
   created_at: string;
-  updated_at: string;
-  route: {
+  routes: {
     id: string;
     name: string;
-    description?: string;
+    description: string;
     distance: number;
     duration: number;
     difficulty: string;
     elevation_gain: number;
-    start_location?: any;
-    end_location?: any;
+    start_point_name?: string;
+    end_point_name?: string;
     images: string[];
-    rating?: number;
-    tags?: string[];
-    categories?: {
-      name: string;
-      icon: string;
-    };
   };
-  creator: {
+  profiles: {
     id: string;
     full_name?: string;
     username?: string;
     avatar_url?: string;
   };
-  user_role: string; // "leader" or "member"
-  joined_at?: string;
-  // Legacy fields for backward compatibility
-  routes?: any;
-  profiles?: any;
-  members?: any[];
-  participants?: any[];
+  members?: Array<{
+    id: string;
+    user_id: string;
+    role: string;
+    joined_at?: string;
+    profiles: {
+      id: string;
+      full_name?: string;
+      username?: string;
+      avatar_url?: string;
+    };
+  }>;
 }
 
 const GroupRidesScreen = () => {
-  console.log('[GROUP RIDES] Component mounting/rendering');
-  
   const { user } = useAuth() as AuthContextType;
   const [groupRides, setGroupRides] = useState<GroupRide[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  console.log('[GROUP RIDES] User from auth:', user);
-  console.log('[GROUP RIDES] Initial state - loading:', loading, 'error:', error, 'groupRides:', groupRides.length);
 
   // Fetch all group rides
   const fetchGroupRides = useCallback(async () => {
@@ -81,71 +75,35 @@ const GroupRidesScreen = () => {
     try {
       setError(null);
       console.log('[GROUP RIDES] Fetching group rides for user:', user.id);
-      console.log('[GROUP RIDES] User object:', user);
-      console.log('[GROUP RIDES] User ID type:', typeof user.id);
 
-      // Use the groupRideApi helper function - try without status filter first
-      let data = await groupRideApi.getUserGroupRides(user.id, {
-        page: 1,
-        limit: 50
+      const response = await fetch(`${getBaseUrl()}/group-rides`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
-      // If no data returned, try with different status values
-      if (!data || (data.group_rides && data.group_rides.length === 0) || (Array.isArray(data) && data.length === 0)) {
-        console.log('[GROUP RIDES] No data with default params, trying with status=active');
-        data = await groupRideApi.getUserGroupRides(user.id, {
-          status: 'active',
-          page: 1,
-          limit: 50
-        });
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GROUP RIDES] Fetch failed:', response.status, errorText);
+        throw new Error(`Failed to fetch group rides: ${response.status}`);
       }
 
-      // If still no data, try with status=completed
-      if (!data || (data.group_rides && data.group_rides.length === 0) || (Array.isArray(data) && data.length === 0)) {
-        console.log('[GROUP RIDES] No data with active status, trying with status=completed');
-        data = await groupRideApi.getUserGroupRides(user.id, {
-          status: 'completed',
-          page: 1,
-          limit: 50
-        });
-      }
+      const data = await response.json();
+      console.log('[GROUP RIDES] Raw response:', data);
 
-      console.log('[GROUP RIDES] Raw response:', JSON.stringify(data, null, 2));
-      console.log('[GROUP RIDES] Response type:', typeof data);
-      console.log('[GROUP RIDES] Is array:', Array.isArray(data));
-      console.log('[GROUP RIDES] Response keys:', data ? Object.keys(data) : 'null');
-
-      // Handle backend response format
+      // Handle different response formats
       let rides = [];
-      if (data.group_rides && Array.isArray(data.group_rides)) {
-        rides = data.group_rides;
-        console.log('[GROUP RIDES] Using group_rides array:', rides.length);
-      } else if (Array.isArray(data)) {
+      if (Array.isArray(data)) {
         rides = data;
-        console.log('[GROUP RIDES] Using direct array:', rides.length);
+      } else if (data.group_rides && Array.isArray(data.group_rides)) {
+        rides = data.group_rides;
       } else if (data.data && Array.isArray(data.data)) {
         rides = data.data;
-        console.log('[GROUP RIDES] Using data array:', rides.length);
-      } else {
-        console.log('[GROUP RIDES] No valid rides array found in response');
-        console.log('[GROUP RIDES] Available data properties:', data ? Object.keys(data) : 'null');
       }
 
-      console.log('[GROUP RIDES] Extracted rides:', rides.length);
-      console.log('[GROUP RIDES] First ride sample:', rides[0]);
-      console.log('[GROUP RIDES] Pagination info:', data.pagination);
-
-      // Filter and sort rides to show most relevant first
-      const sortedRides = rides
-        .filter((ride: any) => ride && ride.id) // Ensure valid rides
-        .sort((a: any, b: any) => {
-          // Sort by creation date (newest first)
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        });
-
-      setGroupRides(sortedRides);
-      console.log('[GROUP RIDES] Loaded group rides:', sortedRides.length);
-      console.log('[GROUP RIDES] Sample ride data:', sortedRides[0]);
+      setGroupRides(rides);
+      console.log('[GROUP RIDES] Loaded group rides:', rides.length);
     } catch (error) {
       console.error('[GROUP RIDES] Error fetching group rides:', error);
       setError('Failed to load group rides. Please try again.');
@@ -153,11 +111,9 @@ const GroupRidesScreen = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => {
-    console.log('[GROUP RIDES] useEffect triggered - calling fetchGroupRides');
-    console.log('[GROUP RIDES] fetchGroupRides function:', fetchGroupRides);
     fetchGroupRides();
   }, [fetchGroupRides]);
 
@@ -175,41 +131,15 @@ const GroupRidesScreen = () => {
     );
   };
 
-  const handleGroupRidePress = async (groupRide: GroupRide) => {
-    console.log('[GROUP RIDES] Navigating to group ride status:', groupRide.id);
-    console.log('[GROUP RIDES] Group ride data:', {
-      id: groupRide.id,
-      routeName: groupRide.route?.name || groupRide.routes?.name,
-      status: groupRide.status,
-      userRole: groupRide.user_role
+  const handleGroupRidePress = (groupRide: GroupRide) => {
+    console.log('[GROUP RIDES] Navigating to group ride details:', groupRide.id);
+    router.push({
+      pathname: '/group-ride-details',
+      params: {
+        groupRideId: groupRide.id,
+        groupRideData: JSON.stringify(groupRide),
+      },
     });
-    
-    try {
-      // Fetch full group ride details from API to get members/participants data
-      console.log('[GROUP RIDES] Fetching full group ride details for navigation');
-      const fullGroupRideData = await groupRideApi.getGroupRideDetails(groupRide.id);
-      console.log('[GROUP RIDES] Full group ride data fetched:', fullGroupRideData);
-      
-      router.push({
-        pathname: '/group-ride-status',
-        params: {
-          groupRideId: groupRide.id,
-          groupRideData: JSON.stringify(fullGroupRideData),
-          source: 'group-rides',
-        },
-      });
-    } catch (error) {
-      console.error('[GROUP RIDES] Error fetching full group ride details:', error);
-      // Fallback to basic data if API call fails
-      router.push({
-        pathname: '/group-ride-status',
-        params: {
-          groupRideId: groupRide.id,
-          groupRideData: JSON.stringify(groupRide),
-          source: 'group-rides',
-        },
-      });
-    }
   };
 
   const getDifficultyColor = (difficulty: string) => {
@@ -250,39 +180,16 @@ const GroupRidesScreen = () => {
   };
 
   const getParticipantCount = (groupRide: GroupRide) => {
-    console.log('[GROUP RIDES] Getting participant count for:', groupRide.id);
-    console.log('[GROUP RIDES] Group ride members:', groupRide.members);
-    console.log('[GROUP RIDES] Group ride participants:', groupRide.participants);
-    
     if (groupRide.members && Array.isArray(groupRide.members)) {
-      console.log('[GROUP RIDES] Using members array, count:', groupRide.members.length);
       return groupRide.members.length;
     }
-    if (groupRide.participants && Array.isArray(groupRide.participants)) {
-      console.log('[GROUP RIDES] Using participants array, count:', groupRide.participants.length);
-      return groupRide.participants.length;
-    }
-    console.log('[GROUP RIDES] No members/participants array found, returning 1 (creator only)');
-    return 1; // At least the creator is a participant
+    return 0;
   };
 
   const renderGroupRide = ({ item }: { item: GroupRide }) => {
-    console.log('[GROUP RIDES] Rendering group ride:', item.id, item.route?.name || item.routes?.name);
-    
-    // Use new backend response structure with fallbacks for legacy data
-    const routeInfo = item.route || item.routes || {};
-    const creatorInfo = item.creator || item.profiles || {};
-    const userRole = item.user_role || 'Unknown';
-    
-    console.log('[GROUP RIDES] Route info:', routeInfo);
-    console.log('[GROUP RIDES] Creator info:', creatorInfo);
-    console.log('[GROUP RIDES] User role:', userRole);
-    
-    // Determine if user is creator
-    const isCreator = user?.id === item.created_by || userRole === 'leader';
-    
-    // Get participant count (this might need to be calculated differently with new API)
     const participantCount = getParticipantCount(item);
+    const organizerInfo = item.profiles || {};
+    const routeInfo = item.routes || {};
 
     return (
       <TouchableOpacity
@@ -311,11 +218,6 @@ const GroupRidesScreen = () => {
                 <View style={[styles.difficultyBadge, { backgroundColor: getDifficultyColor(routeInfo.difficulty) }]}>
                   <Text style={styles.difficultyText}>{routeInfo.difficulty || 'Easy'}</Text>
                 </View>
-                {routeInfo.categories && (
-                  <View style={[styles.categoryBadge, { backgroundColor: theme.colors.primary }]}>
-                    <Text style={styles.categoryText}>{routeInfo.categories.name}</Text>
-                  </View>
-                )}
                 <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
                   <Text style={styles.statusText}>{item.status || 'Unknown'}</Text>
                 </View>
@@ -344,14 +246,14 @@ const GroupRidesScreen = () => {
           <View style={styles.cardFooter}>
             <View style={styles.organizerInfo}>
               <View style={styles.organizerAvatar}>
-                {creatorInfo.avatar_url ? (
-                  <Image source={{ uri: creatorInfo.avatar_url }} style={styles.avatarImage} />
+                {organizerInfo.avatar_url ? (
+                  <Image source={{ uri: organizerInfo.avatar_url }} style={styles.avatarImage} />
                 ) : (
                   <Ionicons name="person" size={16} color={theme.colors.primary} />
                 )}
               </View>
               <Text style={styles.organizerText}>
-                by {creatorInfo.full_name || creatorInfo.username || 'Unknown'}
+                by {organizerInfo.full_name || organizerInfo.username || 'Unknown'}
               </Text>
             </View>
             <View style={styles.participantInfo}>
@@ -360,42 +262,10 @@ const GroupRidesScreen = () => {
             </View>
           </View>
 
-          {/* User Role Badge */}
-          <View style={styles.roleContainer}>
-            <View style={[
-              styles.roleBadge, 
-              { backgroundColor: isCreator ? theme.colors.primary : theme.colors.textSecondary }
-            ]}>
-              <Ionicons 
-                name={isCreator ? "star" : "person"} 
-                size={12} 
-                color="#FFFFFF" 
-              />
-              <Text style={styles.roleText}>
-                {userRole === 'leader' ? 'Leader' : userRole === 'member' ? 'Member' : userRole}
-              </Text>
-            </View>
-          </View>
-
-          {/* Dates and Additional Info */}
-          <View style={styles.dateContainer}>
-            <Text style={styles.createdDate}>
-              Created {formatDate(item.created_at)}
-            </Text>
-            {item.joined_at && (
-              <Text style={styles.joinedDate}>
-                Joined {formatDate(item.joined_at)}
-              </Text>
-            )}
-          </View>
-          
-          {/* Route Rating */}
-          {routeInfo.rating && (
-            <View style={styles.ratingContainer}>
-              <Ionicons name="star" size={14} color="#FFD700" />
-              <Text style={styles.ratingText}>{routeInfo.rating.toFixed(1)}</Text>
-            </View>
-          )}
+          {/* Created Date */}
+          <Text style={styles.createdDate}>
+            Created {formatDate(item.created_at)}
+          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -411,7 +281,7 @@ const GroupRidesScreen = () => {
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Group Rides</Text>
+          <Text style={styles.headerTitle}>Group Rides</Text>
           <View style={styles.headerButton} />
         </View>
         <View style={styles.loadingContainer}>
@@ -432,7 +302,7 @@ const GroupRidesScreen = () => {
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Group Rides</Text>
+          <Text style={styles.headerTitle}>Group Rides</Text>
           <View style={styles.headerButton} />
         </View>
         <View style={styles.errorContainer}>
@@ -466,16 +336,12 @@ const GroupRidesScreen = () => {
       </View>
 
       {/* Content */}
-      {(() => {
-        console.log('[GROUP RIDES] Rendering content - groupRides.length:', groupRides.length);
-        console.log('[GROUP RIDES] groupRides array:', groupRides);
-        return groupRides.length === 0;
-      })() ? (
+      {groupRides.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Ionicons name="people-outline" size={64} color={theme.colors.textSecondary} />
-          <Text style={styles.emptyTitle}>No Group Rides Found</Text>
+          <Text style={styles.emptyTitle}>No Group Rides Yet</Text>
           <Text style={styles.emptySubtitle}>
-            You haven&apos;t created or joined any group rides yet. Create your first group ride or wait for invitations from friends.
+            Create your first group ride or wait for invitations from friends.
           </Text>
           <TouchableOpacity style={styles.createButton} onPress={handleCreateGroupRide}>
             <Ionicons name="add" size={20} color="#FFFFFF" />
@@ -489,8 +355,6 @@ const GroupRidesScreen = () => {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
-          onLayout={() => console.log('[GROUP RIDES] FlatList onLayout - rendering with', groupRides.length, 'items')}
-          onContentSizeChange={() => console.log('[GROUP RIDES] FlatList content size changed')}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -626,17 +490,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     textTransform: 'capitalize',
   },
-  categoryBadge: {
-    paddingHorizontal: theme.spacing.xs,
-    paddingVertical: 2,
-    borderRadius: 8,
-    marginLeft: theme.spacing.xs,
-  },
-  categoryText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
   statusBadge: {
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
@@ -708,48 +561,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: theme.spacing.xs,
   },
-  dateContainer: {
-    marginTop: theme.spacing.xs,
-  },
   createdDate: {
     ...theme.typography.body,
     color: theme.colors.textSecondary,
     fontSize: 12,
-  },
-  joinedDate: {
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: theme.spacing.xs,
-  },
-  ratingText: {
-    ...theme.typography.body,
-    color: theme.colors.text,
-    fontSize: 12,
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  roleContainer: {
-    marginTop: theme.spacing.xs,
-    alignItems: 'flex-start',
-  },
-  roleBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.xs,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  roleText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-    marginLeft: 4,
   },
   emptyContainer: {
     flex: 1,

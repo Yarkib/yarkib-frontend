@@ -35,6 +35,7 @@ const HomeScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>('all'); // Default to 'all' to show everything
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [selectedState, setSelectedState] = useState<string>('');
   
   // Filter states - using more inclusive defaults
   const [minDistance, setMinDistance] = useState("0"); // km
@@ -65,13 +66,23 @@ const HomeScreen = () => {
       console.log('[INFO] Backend URL:', baseUrl);
       console.log('[INFO] Mock mode:', MOCK_MODE);
       console.log('[INFO] User authenticated:', !!user);
+      console.log('[INFO] Selected state filter:', selectedState || '(none)');
+      console.log('[INFO] Search query:', searchQuery || '(none)');
       
+      // Build endpoint and query params
+      const useSearchEndpoint = !!searchQuery?.trim();
+      const endpointPath = useSearchEndpoint ? '/routes/search' : '/routes';
+      const params = new URLSearchParams();
+      if (selectedState?.trim()) params.append('state', selectedState.trim());
+      if (useSearchEndpoint) params.append('q', searchQuery.trim());
+      const url = `${baseUrl}${endpointPath}${params.toString() ? `?${params.toString()}` : ''}`;
+
       // Try to fetch routes with authentication if user is logged in
       let response;
       if ((user as any)?.access_token || (user as any)?.session?.access_token) {
         const token = (user as any).access_token || (user as any).session.access_token;
         console.log('[INFO] Attempting authenticated routes fetch...');
-        response = await fetch(`${baseUrl}/routes`, {
+        response = await fetch(url, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -79,14 +90,15 @@ const HomeScreen = () => {
         });
       } else {
         console.log('[INFO] Attempting public routes fetch...');
-        response = await fetch(`${baseUrl}/routes`);
+        response = await fetch(url);
       }
       
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
           console.log('[INFO] Routes endpoint requires authentication, trying public endpoint...');
           // Try public routes endpoint
-          const publicResponse = await fetch(`${baseUrl}/public/routes`);
+          const publicFallbackUrl = `${baseUrl}/public/routes${params.toString() ? `?${params.toString()}` : ''}`;
+          const publicResponse = await fetch(publicFallbackUrl);
           if (publicResponse.ok) {
             response = publicResponse;
           } else {
@@ -189,7 +201,7 @@ const HomeScreen = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, selectedState, searchQuery]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -519,6 +531,7 @@ const HomeScreen = () => {
             style={styles.showAllButton}
             onPress={() => {
               setSelectedCategory('all');
+            setSelectedState('');
               setMinDistance("0");
               setMaxDistance("110000");
               setMinDuration("0");
@@ -611,6 +624,26 @@ const HomeScreen = () => {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+              </View>
+
+              {/* Distance Filter */}
+              {/* State Filter */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>State (2-letter code)</Text>
+                <View style={styles.inputRow}>
+                  <View style={[styles.inputContainer, { maxWidth: '100%' }]}>
+                    <TextInput
+                      style={styles.textInput}
+                      value={selectedState}
+                      onChangeText={(val) => setSelectedState(val.toUpperCase())}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      placeholder="e.g., CA"
+                      placeholderTextColor="#999"
+                      maxLength={20}
+                    />
+                  </View>
+                </View>
               </View>
 
               {/* Distance Filter */}
@@ -717,6 +750,7 @@ const HomeScreen = () => {
                 style={styles.resetButton}
                 onPress={() => {
                   setSelectedCategory('all');
+                  setSelectedState('');
                   setMinDistance("0");
                   setMaxDistance("110000");
                   setMinDuration("0");
