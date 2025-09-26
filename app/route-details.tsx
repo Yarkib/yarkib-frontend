@@ -4,7 +4,7 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../src/theme';
 import { fetchRouteElevation, userRoutesApi } from '../src/utils/api';
-import RouteElevationChart from '../src/components/RouteElevationChart';
+import ElevationChart from '../src/components/ElevationChart';
 import RouteActionButtons from '../src/components/RouteActionButtons';
 import WaypointsSection from '../src/components/WaypointsSection';
 import { useAuth } from '../src/context/AuthContext';
@@ -238,9 +238,10 @@ const RouteDetails = () => {
                   <Text style={styles.errorText}>{elevationError}</Text>
                 </View>
               ) : (elevationData?.elevation_profile || route.elevation_profile) ? (
-                <RouteElevationChart 
+                <ElevationChart 
                   data={elevationData?.elevation_profile || route.elevation_profile} 
                   maxElevation={elevationData?.max_elevation || route.max_elevation}
+                  gpxFileUrl={route.gpx_file_url}
                 />
               ) : (
                 <View style={styles.emptyContainer}>
