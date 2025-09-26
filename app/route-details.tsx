@@ -6,6 +6,7 @@ import { theme } from '../src/theme';
 import { fetchRouteElevation, userRoutesApi } from '../src/utils/api';
 import RouteElevationChart from '../src/components/RouteElevationChart';
 import RouteActionButtons from '../src/components/RouteActionButtons';
+import WaypointsSection from '../src/components/WaypointsSection';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 
@@ -103,6 +104,7 @@ const RouteDetails = () => {
     };
     load();
   }, [route?.id]);
+
 
   const formatDuration = (minutes?: number) => {
     if (!minutes && minutes !== 0) return '—';
@@ -248,6 +250,14 @@ const RouteDetails = () => {
               )}
             </View>
           </View>
+
+          {/* Waypoints Section */}
+          <WaypointsSection
+            routeId={route.id}
+            onTimeUpdate={(updatedWaypoints) => {
+              console.log('Waypoints updated:', updatedWaypoints);
+            }}
+          />
           
           {/* External Links Card */}
           <View style={styles.card}>
