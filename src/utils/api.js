@@ -89,101 +89,217 @@ const testBackendEndpoints = async () => {
 // IMPORTANT: Mock mode is now controlled by centralized configuration
 export const MOCK_MODE = isMockMode();
 
-// Function to fetch route elevation profile
-export const fetchRouteElevation = async (routeId) => {
-  if (MOCK_MODE) {
-    console.log('[MOCK] Fetching route elevation profile for route:', routeId);
-    
-    // Return different mock data based on route ID for more realistic testing
-    if (routeId === 'route_1') {
-      return {
-        id: routeId,
-        name: "Scenic Mountain Trail",
-        elevation_profile: Array(20).fill(0).map((_, i) => ({
-          distance: i * 1.2,
-          elevation: 100 + Math.sin(i / 3) * 100 + i * 10 + (i > 10 ? 50 : 0) // Add more variation
-        })),
-        max_elevation: 400,
-        start_point_name: "Central Park",
-        end_point_name: "Times Square"
-      };
-    } else if (routeId === 'route_2') {
-      return {
-        id: routeId,
-        name: "City River Loop",
-        elevation_profile: Array(15).fill(0).map((_, i) => ({
-          distance: i * 1.0,
-          elevation: 50 + Math.cos(i / 2) * 30 + Math.sin(i) * 40 + i * 5 // More variation
-        })),
-        max_elevation: 180,
-        start_point_name: "Battery Park",
-        end_point_name: "Battery Park"
-      };
-    } else {
-      // Generic data for any other route
-      return {
-        id: routeId,
-        name: "Generic Route",
-        elevation_profile: Array(25).fill(0).map((_, i) => ({
-          distance: i * 0.8,
-          elevation: 200 + Math.sin(i / 4) * 50 + Math.cos(i / 2) * 30 + (i % 3 === 0 ? 40 : 0) // Add peaks
-        })),
-        max_elevation: 320,
-        start_point_name: "Starting Point",
-        end_point_name: "Ending Point"
-      };
-    }
+// Helper function to transform backend route data to frontend format
+const transformRouteData = (data) => {
+  console.log('[ROUTE TRANSFORM] Route:', data.id, data.name, '| Coords:', !!data.coordinates, '| Waypoints:', !!data.waypoints, '| RoutePoints:', !!data.route_points, '| Elevation:', !!data.elevation_profile, '| GPX:', !!data.gpx_file_url);
+  
+  // If data already has the correct format, return as-is
+  if (data.route_points && data.start_location && data.end_location) {
+    console.log('[ROUTE TRANSFORM] Data already in correct format - no transformation needed');
+    return data;
   }
+  
+  // Log what data sources are missing
+  if (!data.coordinates && !data.waypoints && !data.route_points && !data.elevation_profile) {
+    console.warn('[ROUTE TRANSFORM] ⚠️ No coordinate data available!', {
+      hasGPX: !!data.gpx_file_url,
+      gpxUrl: data.gpx_file_url
+    });
+  }
+  
+  // If we have coordinates from the dedicated endpoint, use them directly
+  if (data.coordinates && Array.isArray(data.coordinates) && data.coordinates.length > 0) {
+    console.log('[ROUTE TRANSFORM] Using coordinates from dedicated endpoint');
+    return {
+      ...data,
+      route_points: data.coordinates,
+      // start_location and end_location should already be in the response
+    };
+  }
+  
+  const transformed = { ...data };
+  let transformApplied = false;
+  
+  // Transform waypoints array if it exists (with lat/lon format)
+  if (data.waypoints && Array.isArray(data.waypoints) && data.waypoints.length > 0) {
+    console.log('[ROUTE TRANSFORM] Found waypoints array with', data.waypoints.length, 'points');
+    
+    transformApplied = true;
+    transformed.route_points = data.waypoints.map(wp => ({
+      latitude: wp.lat || wp.latitude,
+      longitude: wp.lon || wp.longitude,
+    }));
+    
+    console.log('[ROUTE TRANSFORM] Created route_points:', transformed.route_points.length, 'points');
+    
+    // Set start and end locations from first and last waypoints
+    const firstWaypoint = data.waypoints[0];
+    const lastWaypoint = data.waypoints[data.waypoints.length - 1];
+    
+    transformed.start_location = {
+      latitude: firstWaypoint.lat || firstWaypoint.latitude,
+      longitude: firstWaypoint.lon || firstWaypoint.longitude,
+      address: firstWaypoint.address || data.start_point_name,
+    };
+    
+    transformed.end_location = {
+      latitude: lastWaypoint.lat || lastWaypoint.latitude,
+      longitude: lastWaypoint.lon || lastWaypoint.longitude,
+      address: lastWaypoint.address || data.end_point_name,
+    };
+    
+    console.log('[ROUTE TRANSFORM] Created start_location and end_location');
+  } 
+  // Try elevation_profile if it has lat/lon coordinates
+  else if (data.elevation_profile && Array.isArray(data.elevation_profile) && data.elevation_profile.length > 0) {
+    const firstPoint = data.elevation_profile[0];
+    
+    // Check if elevation_profile contains lat/lon (some routes store coordinates here)
+    if (firstPoint.lat !== undefined && firstPoint.lon !== undefined) {
+      console.log('[ROUTE TRANSFORM] Found elevation_profile with coordinates, converting to route_points');
+      console.log('[ROUTE TRANSFORM] Elevation profile has', data.elevation_profile.length, 'points');
+      
+      transformApplied = true;
+      transformed.route_points = data.elevation_profile.map(point => ({
+        latitude: point.lat || point.latitude,
+        longitude: point.lon || point.longitude,
+      }));
+      
+      console.log('[ROUTE TRANSFORM] Created route_points from elevation:', transformed.route_points.length, 'points');
+      
+      // Set start and end locations
+      const firstElevPoint = data.elevation_profile[0];
+      const lastElevPoint = data.elevation_profile[data.elevation_profile.length - 1];
+      
+      transformed.start_location = {
+        latitude: firstElevPoint.lat || firstElevPoint.latitude,
+        longitude: firstElevPoint.lon || firstElevPoint.longitude,
+        address: data.start_point_name,
+      };
+      
+      transformed.end_location = {
+        latitude: lastElevPoint.lat || lastElevPoint.latitude,
+        longitude: lastElevPoint.lon || lastElevPoint.longitude,
+        address: data.end_point_name,
+      };
+      
+      console.log('[ROUTE TRANSFORM] Created start/end locations from elevation data');
+    } else {
+      console.log('[ROUTE TRANSFORM] Elevation profile exists but has no coordinates (distance/elevation only)');
+    }
+  } else {
+    console.log('[ROUTE TRANSFORM] No waypoints or elevation_profile with coordinates found');
+  }
+  
+  // Transform elevation_profile if it exists
+  if (data.elevation_profile && Array.isArray(data.elevation_profile)) {
+    transformed.elevation_profile = data.elevation_profile.map(point => ({
+      distance: point.distance,
+      elevation: point.elevation,
+    }));
+  }
+  
+  console.log('[ROUTE TRANSFORM] Complete. Applied:', transformApplied, '| Points:', transformed.route_points?.length || 0, '| Start:', !!transformed.start_location, '| End:', !!transformed.end_location);
+  
+  return transformed;
+};
 
+// Function to fetch individual route details
+export const fetchRouteDetails = async (routeId) => {
   try {
     const baseUrl = getBaseUrl();
-    const elevationUrl = `${baseUrl}/routes/${routeId}/elevation`;
-    console.log(`[REAL] Fetching route elevation profile from ${elevationUrl}`);
+    const routeUrl = `${baseUrl}/routes/${routeId}`;
+    console.log(`[ROUTE DETAILS] Fetching route details from ${routeUrl}`);
     
-    const response = await fetch(elevationUrl);
+    const response = await fetch(routeUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[REAL] HTTP error! status: ${response.status}, body: ${errorText}`);
+      console.error(`[ROUTE DETAILS] HTTP error! status: ${response.status}, body: ${errorText}`);
       
-      // If elevation data is not available, return mock data as fallback
       if (response.status === 404) {
-        console.log('[REAL] Elevation data not available, falling back to mock data');
-        return {
-          id: routeId,
-          name: "Route Elevation Profile",
-          elevation_profile: Array(20).fill(0).map((_, i) => ({
-            distance: i * 1.0,
-            elevation: 100 + Math.sin(i / 3) * 50 + i * 5
-          })),
-          max_elevation: 200,
-          start_point_name: "Start Point",
-          end_point_name: "End Point"
-        };
+        throw new Error('Route not found');
       }
       
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
     const data = await response.json();
-    console.log('[REAL] Received elevation profile data:', data);
+    console.log('[ROUTE DETAILS] Received:', data.id, data.name, '| Dist:', data.distance, 'km | Duration:', data.duration, 'min');
+    console.log('[ROUTE DETAILS] Data: Waypoints:', data.waypoints?.length || 0, '| RoutePoints:', data.route_points?.length || 0, '| Elevation:', data.elevation_profile?.length || 0);
+    
+    // Transform the data to match frontend expectations
+    const transformedData = transformRouteData(data);
+    
+    console.log('[ROUTE DETAILS] Transformed: RoutePoints:', transformedData.route_points?.length || 0);
+    
+    return transformedData;
+  } catch (error) {
+    console.error('[ROUTE DETAILS] Error fetching route details:', error);
+    throw error;
+  }
+};
+
+// Function to fetch route coordinates (geometry)
+export const fetchRouteCoordinates = async (routeId) => {
+  try {
+    const baseUrl = getBaseUrl();
+    const coordinatesUrl = `${baseUrl}/routes/${routeId}/coordinates`;
+    console.log(`[ROUTE COORDINATES] Fetching coordinates from ${coordinatesUrl}`);
+    
+    const response = await fetch(coordinatesUrl);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[ROUTE COORDINATES] HTTP error! status: ${response.status}, body: ${errorText}`);
+      
+      if (response.status === 404) {
+        throw new Error('Route coordinates not available');
+      }
+      
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('[ROUTE COORDINATES] Received:', data.route_id, '| Points:', data.coordinates?.length || 0);
     return data;
   } catch (error) {
-    console.error('[REAL] Error fetching route elevation profile:', error);
+    console.error('[ROUTE COORDINATES] Error fetching route coordinates:', error);
+    throw error;
+  }
+};
+
+// Function to fetch route elevation profile
+export const fetchRouteElevation = async (routeId) => {
+  try {
+    const baseUrl = getBaseUrl();
+    const elevationUrl = `${baseUrl}/routes/${routeId}/elevation`;
+    console.log(`[ELEVATION] Fetching route elevation profile from ${elevationUrl}`);
     
-    // Fallback to mock data if there's any error
-    console.log('[REAL] Falling back to mock elevation data due to error');
-    return {
-      id: routeId,
-      name: "Route Elevation Profile",
-      elevation_profile: Array(20).fill(0).map((_, i) => ({
-        distance: i * 1.0,
-        elevation: 100 + Math.sin(i / 3) * 50 + i * 5
-      })),
-      max_elevation: 200,
-      start_point_name: "Start Point",
-      end_point_name: "End Point"
-    };
+    const response = await fetch(elevationUrl);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[ELEVATION] HTTP error! status: ${response.status}, body: ${errorText}`);
+      
+      if (response.status === 404) {
+        throw new Error('Elevation data not available for this route');
+      }
+      
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('[ELEVATION] Received: Points:', data?.elevation_profile?.length || 0, '| Max:', data?.max_elevation || 0);
+    return data;
+  } catch (error) {
+    console.error('[ELEVATION] Error fetching route elevation profile:', error);
+    throw error;
   }
 };
 
@@ -788,7 +904,28 @@ export const userRoutesApi = {
       credentials: 'include',
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
+    
+    const data = await response.json();
+    
+    // Transform embedded route objects if they exist
+    if (data.data && Array.isArray(data.data)) {
+      console.log('[USER ROUTES] Transforming user routes data');
+      data.data = data.data.map(userRoute => {
+        if (userRoute.route) {
+          return {
+            ...userRoute,
+            route: transformRouteData(userRoute.route)
+          };
+        }
+        return userRoute;
+      });
+    } else if (Array.isArray(data)) {
+      // If data is directly an array of routes
+      console.log('[USER ROUTES] Transforming routes array');
+      data = data.map(route => transformRouteData(route));
+    }
+    
+    return data;
   },
 
   // ✨ Get route status for a specific user and route

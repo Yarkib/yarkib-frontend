@@ -43,6 +43,18 @@ export interface Route {
   // User interaction states
   is_saved?: boolean;           // Whether the current user has saved this route
   is_completed?: boolean;       // Whether the current user has completed this route
+  
+  // Route geometry for Mapbox rendering
+  route_geometry?: {            // GeoJSON LineString format
+    type: 'LineString';
+    coordinates: number[][];    // Array of [longitude, latitude]
+  };
+  
+  // Route calculation preferences
+  route_preferences?: {
+    type: 'fastest' | 'shortest' | 'scenic';
+    profile?: 'cycling' | 'driving' | 'walking';
+  };
 }
 
 // Route action button states

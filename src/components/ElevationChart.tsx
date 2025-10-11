@@ -1,32 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler,
-  TooltipItem,
-} from 'chart.js';
-import { Line } from 'react-chartjs-2';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Dimensions } from 'react-native';
+import { LineChart } from 'react-native-chart-kit';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../theme';
-
-// Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
-);
+import { XMLParser } from 'fast-xml-parser';
 
 interface ElevationPoint {
   distance: number;
@@ -117,22 +94,38 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
       }
       
       const gpxText = await response.text();
-      const parser = new DOMParser();
-      const gpxDoc = parser.parseFromString(gpxText, 'application/xml');
       
-      // Check for parsing errors
-      const parserError = gpxDoc.querySelector('parsererror');
-      if (parserError) {
+      // Configure parser options
+      const options = {
+        ignoreAttributes: false,
+        attributeNamePrefix: "@_",
+        allowBooleanAttributes: true
+      };
+      
+      const parser = new XMLParser(options);
+      const gpxDoc = parser.parse(gpxText);
+      
+      if (!gpxDoc) {
         throw new Error('Invalid GPX file format');
       }
       
-      // Try different selectors for track points
-      let trackPoints = gpxDoc.querySelectorAll('trkpt');
-      if (trackPoints.length === 0) {
-        trackPoints = gpxDoc.querySelectorAll('wpt'); // Try waypoints
-      }
-      if (trackPoints.length === 0) {
-        trackPoints = gpxDoc.querySelectorAll('rtept'); // Try route points
+      // Extract track points from parsed XML
+      let trackPoints: any[] = [];
+      
+      // Try to find track points in different possible locations in GPX structure
+      if (gpxDoc.gpx?.trk?.trkseg?.trkpt) {
+        // Standard GPX track points
+        trackPoints = Array.isArray(gpxDoc.gpx.trk.trkseg.trkpt) 
+          ? gpxDoc.gpx.trk.trkseg.trkpt 
+          : [gpxDoc.gpx.trk.trkseg.trkpt];
+      } else if (gpxDoc.gpx?.wpt) {
+        // Waypoints
+        trackPoints = Array.isArray(gpxDoc.gpx.wpt) ? gpxDoc.gpx.wpt : [gpxDoc.gpx.wpt];
+      } else if (gpxDoc.gpx?.rte?.rtept) {
+        // Route points
+        trackPoints = Array.isArray(gpxDoc.gpx.rte.rtept) 
+          ? gpxDoc.gpx.rte.rtept 
+          : [gpxDoc.gpx.rte.rtept];
       }
       
       if (trackPoints.length === 0) {
@@ -146,8 +139,9 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
       let validElevationCount = 0;
 
       trackPoints.forEach((point, index) => {
-        const latStr = point.getAttribute('lat');
-        const lonStr = point.getAttribute('lon');
+        // Extract lat/lon from attributes
+        const latStr = point["@_lat"];
+        const lonStr = point["@_lon"];
         
         if (!latStr || !lonStr) {
           return;
@@ -162,19 +156,19 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 
         // Try multiple ways to get elevation
         let elevation = 0;
-        const eleElement = point.querySelector('ele');
         
-        if (eleElement && eleElement.textContent) {
-          const eleValue = parseFloat(eleElement.textContent.trim());
+        // Check for elevation in ele element
+        if (point.ele) {
+          const eleValue = parseFloat(point.ele);
           if (!isNaN(eleValue)) {
             elevation = eleValue;
             validElevationCount++;
           }
         }
 
-        // If no elevation in <ele>, try other common GPX elevation attributes
+        // If no elevation in ele, try attributes
         if (elevation === 0) {
-          const elevationAttr = point.getAttribute('elevation') || point.getAttribute('alt');
+          const elevationAttr = point["@_elevation"] || point["@_alt"];
           if (elevationAttr) {
             const eleValue = parseFloat(elevationAttr);
             if (!isNaN(eleValue)) {
@@ -264,135 +258,109 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
     );
   }
 
+  const screenWidth = Dimensions.get('window').width - 32; // Adjust for padding
+  
+  // Create smart labels - only show 5 evenly spaced distance markers
+  const createSmartLabels = () => {
+    const labelCount = 5;
+    const labels = new Array(sampledData.length).fill('');
+    const step = Math.floor(sampledData.length / (labelCount - 1));
+    
+    for (let i = 0; i < labelCount; i++) {
+      const index = i === labelCount - 1 ? sampledData.length - 1 : i * step;
+      if (sampledData[index]) {
+        labels[index] = `${sampledData[index].distance.toFixed(0)}`;
+      }
+    }
+    
+    return labels;
+  };
+  
   const chartData = {
-    labels: sampledData.map(point => point.distance.toFixed(2)),
+    labels: createSmartLabels(),
     datasets: [
       {
-        label: 'Elevation (m)',
         data: sampledData.map(point => point.elevation),
-        borderColor: theme.colors.primary,
-        backgroundColor: theme.colors.primary + '20',
-        borderWidth: 2,
-        fill: true,
-        tension: 0.1,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        pointHoverBackgroundColor: theme.colors.primary,
-        pointHoverBorderColor: '#ffffff',
-        pointHoverBorderWidth: 2,
+        color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`, // Blue
+        strokeWidth: 3,
       },
     ],
   };
 
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: false,
-      },
-      title: {
-        display: true,
-        text: 'Elevation Profile',
-        font: {
-          size: 16,
-          weight: 'bold' as const,
-        },
-        color: theme.colors.text,
-      },
-      tooltip: {
-        mode: 'index' as const,
-        intersect: false,
-        backgroundColor: theme.colors.text,
-        titleColor: '#ffffff',
-        bodyColor: '#ffffff',
-        borderColor: theme.colors.primary,
-        borderWidth: 1,
-        callbacks: {
-          label: function(context: TooltipItem<'line'>) {
-            const elevation = context.parsed.y;
-            return `Elevation: ${elevation.toFixed(0)}m`;
-          },
-          title: function(context: TooltipItem<'line'>[]) {
-            const distance = parseFloat(context[0].label);
-            return `Distance: ${distance.toFixed(2)} km`;
-          },
-        },
-      },
+  const chartConfig = {
+    backgroundColor: '#FFFFFF',
+    backgroundGradientFrom: '#FFFFFF',
+    backgroundGradientTo: '#FFFFFF',
+    decimalPlaces: 0,
+    color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+    labelColor: (opacity = 1) => `rgba(107, 114, 128, ${opacity})`,
+    style: {
+      borderRadius: 16,
     },
-    scales: {
-      x: {
-        display: true,
-        title: {
-          display: true,
-          text: 'Distance (km)',
-          font: {
-            weight: 'bold' as const,
-          },
-          color: theme.colors.textSecondary,
-        },
-        grid: {
-          color: theme.colors.border,
-        },
-        ticks: {
-          color: theme.colors.textSecondary,
-          maxTicksLimit: 8,
-          callback: function(value: string | number, index: number) {
-            const distance = parseFloat(sampledData[index]?.distance.toFixed(2) || '0');
-            return `${distance}`;
-          },
-        },
-      },
-      y: {
-        display: true,
-        title: {
-          display: true,
-          text: 'Elevation (m)',
-          font: {
-            weight: 'bold' as const,
-          },
-          color: theme.colors.textSecondary,
-        },
-        grid: {
-          color: theme.colors.border,
-        },
-        ticks: {
-          color: theme.colors.textSecondary,
-          callback: function(value: string | number) {
-            return `${Math.round(Number(value))}m`;
-          },
-        },
-        beginAtZero: false,
-      },
+    propsForDots: {
+      r: '0',
     },
-    interaction: {
-      mode: 'index' as const,
-      intersect: false,
+    propsForBackgroundLines: {
+      strokeDasharray: '',
+      stroke: '#E5E7EB',
+      strokeWidth: 1,
     },
+    fillShadowGradient: '#3B82F6',
+    fillShadowGradientOpacity: 0.2,
   };
 
   return (
     <View style={[styles.container]}>
-      <View style={styles.chartContainer}>
-        <Line data={chartData} options={options} />
+      {/* Header */}
+      <View style={styles.header}>
+        <Ionicons name="analytics-outline" size={22} color="#000" />
+        <Text style={styles.headerTitle}>Elevation Profile</Text>
+      </View>
+
+      {/* Chart */}
+      <View style={styles.chartWrapper}>
+        <LineChart
+          data={chartData}
+          width={screenWidth}
+          height={220}
+          chartConfig={chartConfig}
+          bezier
+          style={styles.chart}
+          withDots={false}
+          withInnerLines={true}
+          withOuterLines={false}
+          withVerticalLabels={true}
+          withHorizontalLabels={true}
+          withShadow={false}
+          segments={4}
+        />
+        <Text style={styles.xAxisLabel}>Distance (km)</Text>
       </View>
       
-      <View style={styles.statsContainer}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{chartStats.totalDistance.toFixed(2)} km</Text>
-          <Text style={styles.statLabel}>Total Distance</Text>
-        </View>
-        <View style={styles.statItem}>
+      {/* Stats Grid */}
+      <View style={styles.statsGrid}>
+        <View style={styles.statCard}>
+          <Ionicons name="trending-up-outline" size={20} color="#10B981" />
           <Text style={styles.statValue}>{chartStats.elevationGain.toFixed(0)} m</Text>
           <Text style={styles.statLabel}>Elevation Gain</Text>
         </View>
-        <View style={styles.statItem}>
+        
+        <View style={styles.statCard}>
+          <Ionicons name="arrow-up-outline" size={20} color="#3B82F6" />
           <Text style={styles.statValue}>{chartStats.maxElevation.toFixed(0)} m</Text>
           <Text style={styles.statLabel}>Max Elevation</Text>
         </View>
-        <View style={styles.statItem}>
+        
+        <View style={styles.statCard}>
+          <Ionicons name="arrow-down-outline" size={20} color="#6B7280" />
           <Text style={styles.statValue}>{chartStats.minElevation.toFixed(0)} m</Text>
           <Text style={styles.statLabel}>Min Elevation</Text>
+        </View>
+        
+        <View style={styles.statCard}>
+          <Ionicons name="swap-horizontal-outline" size={20} color="#F59E0B" />
+          <Text style={styles.statValue}>{chartStats.totalDistance.toFixed(1)} km</Text>
+          <Text style={styles.statLabel}>Total Distance</Text>
         </View>
       </View>
     </View>
@@ -401,70 +369,106 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: theme.colors.background,
-    borderRadius: theme.borderRadius.md,
-    marginVertical: theme.spacing.md,
-    padding: theme.spacing.md,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginVertical: 16,
+    marginHorizontal: 0,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
   },
-  chartContainer: {
-    height: 200,
-    marginBottom: theme.spacing.md,
-  },
-  statsContainer: {
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    flexWrap: 'wrap',
-  },
-  statItem: {
     alignItems: 'center',
-    marginVertical: theme.spacing.xs,
-    minWidth: '22%',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+    gap: 12,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+  },
+  chartWrapper: {
+    paddingTop: 16,
+    paddingBottom: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  chart: {
+    marginVertical: 0,
+    borderRadius: 0,
+  },
+  xAxisLabel: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 16,
+    gap: 12,
+    backgroundColor: '#F9FAFB',
+  },
+  statCard: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   statValue: {
-    ...theme.typography.h3,
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#000',
     textAlign: 'center',
   },
   statLabel: {
-    ...theme.typography.body,
-    fontSize: 10,
-    color: theme.colors.textSecondary,
+    fontSize: 12,
+    color: '#6B7280',
     textAlign: 'center',
-    marginTop: 2,
+    fontWeight: '500',
   },
   loadingContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: theme.spacing.xl,
+    paddingVertical: 48,
   },
   loadingText: {
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
-    marginTop: theme.spacing.sm,
+    fontSize: 14,
+    color: '#6B7280',
+    marginTop: 12,
   },
   errorContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: theme.spacing.xl,
+    paddingVertical: 48,
   },
   errorText: {
-    ...theme.typography.body,
+    fontSize: 14,
     color: '#EF4444',
     textAlign: 'center',
-    marginTop: theme.spacing.sm,
+    marginTop: 12,
+    paddingHorizontal: 20,
   },
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: theme.spacing.xl,
+    paddingVertical: 48,
   },
   emptyText: {
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
+    fontSize: 14,
+    color: '#6B7280',
     textAlign: 'center',
-    marginTop: theme.spacing.sm,
+    marginTop: 12,
   },
 });
 

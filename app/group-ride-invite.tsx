@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -360,7 +361,7 @@ const GroupRideInviteScreen = () => {
             <Text style={styles.instructionsTitle}>How to invite riders</Text>
             <Text style={styles.instructionsBody}>
               Search for users by their username, full name, or email address. Toggle between search types 
-              using the buttons above. Once you find someone you want to invite, tap the "Invite" button 
+              using the buttons above. Once you find someone you want to invite, tap the &quot;Invite&quot; button 
               to send them a group ride invitation.
             </Text>
           </View>

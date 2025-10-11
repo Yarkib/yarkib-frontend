@@ -10,19 +10,21 @@ import {
   Alert,
   Image,
   FlatList,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 import { theme } from '../src/theme';
-import { getBaseUrl } from '../src/utils/api';
+import { getBaseUrl, fetchRouteDetails } from '../src/utils/api';
 
 interface GroupRideParticipant {
   id: string;
   user_id: string;
   role: 'leader' | 'participant';
-  status: 'pending' | 'accepted' | 'rejected';
+  status?: 'pending' | 'accepted' | 'rejected';
+  invitation_status?: 'pending' | 'accepted' | 'rejected';
   joined_at?: string;
   profiles: {
     id: string;
@@ -38,7 +40,7 @@ interface GroupRide {
   created_by: string;
   status: string;
   created_at: string;
-  routes: {
+  route?: {
     id: string;
     name: string;
     description: string;
@@ -50,6 +52,32 @@ interface GroupRide {
     end_location?: string;
     start_point_name?: string;
     end_point_name?: string;
+    start_latitude?: number;
+    start_longitude?: number;
+    end_latitude?: number;
+    end_longitude?: number;
+    waypoints?: any[];
+    google_maps_url?: string;
+    images: string[];
+  };
+  routes?: {
+    id: string;
+    name: string;
+    description: string;
+    distance: number;
+    duration: number;
+    difficulty: string;
+    elevation_gain: number;
+    start_location?: string;
+    end_location?: string;
+    start_point_name?: string;
+    end_point_name?: string;
+    start_latitude?: number;
+    start_longitude?: number;
+    end_latitude?: number;
+    end_longitude?: number;
+    waypoints?: any[];
+    google_maps_url?: string;
     images: string[];
   };
   profiles: {
@@ -58,7 +86,16 @@ interface GroupRide {
     username?: string;
     avatar_url?: string;
   };
+  creator?: {
+    id: string;
+    full_name?: string;
+    name?: string;
+    username?: string;
+    avatar_url?: string;
+    avatar?: string;
+  };
   participants?: GroupRideParticipant[];
+  members?: GroupRideParticipant[];
 }
 
 const GroupRideStatusScreen = () => {
@@ -72,7 +109,6 @@ const GroupRideStatusScreen = () => {
   const [groupRide, setGroupRide] = useState<GroupRide | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
   // Smart back navigation based on source
   const handleBackNavigation = () => {
@@ -89,7 +125,7 @@ const GroupRideStatusScreen = () => {
       console.log('[GROUP RIDE STATUS] No source specified, using default navigation');
       try {
         router.back();
-      } catch (error) {
+      } catch {
         console.log('[GROUP RIDE STATUS] router.back() failed, falling back to home');
         router.replace('/home');
       }
@@ -106,15 +142,123 @@ const GroupRideStatusScreen = () => {
           // Use passed data if available
           try {
             const parsedData = JSON.parse(groupRideData);
-            setGroupRide(parsedData);
-            console.log('[GROUP RIDE STATUS] Loaded group ride from params:', parsedData);
-            console.log('[GROUP RIDE STATUS] Participants data:', parsedData.participants);
-            console.log('[GROUP RIDE STATUS] Members data:', parsedData.members);
-            console.log('[GROUP RIDE STATUS] Full data structure:', JSON.stringify(parsedData, null, 2));
-          } catch (error) {
-            console.error('[GROUP RIDE STATUS] Error parsing group ride data:', error);
-            throw new Error('Invalid group ride data');
+            
+            // Normalize the data structure to ensure consistent format
+            const normalizedData = {
+              ...parsedData,
+              route: parsedData.route || parsedData.routes || {},
+              creator: parsedData.creator || parsedData.profiles || {},
+              members: parsedData.members || parsedData.participants || [],
+            };
+
+            // Ensure route has all required fields
+            let routeData = normalizedData.route;
+            
+            // If route data is missing or incomplete, try to fetch it
+            if ((!routeData.name || !routeData.description) && parsedData.route_id) {
+              try {
+                console.log('[GROUP RIDE STATUS] Fetching missing route details for route_id:', parsedData.route_id);
+                const routeDetails = await fetchRouteDetails(parsedData.route_id);
+                routeData = routeDetails;
+                console.log('[GROUP RIDE STATUS] Fetched route details:', routeDetails);
+              } catch (error) {
+                console.error('[GROUP RIDE STATUS] Failed to fetch route details:', error);
+                // Continue with existing route data
+              }
+            }
+            
+            normalizedData.route = {
+              id: routeData.id || parsedData.route_id,
+              name: routeData.name || 'Unknown Route',
+              description: routeData.description || '',
+              distance: Number(routeData.distance) || 0,
+              duration: Number(routeData.duration) || 0,
+              difficulty: routeData.difficulty || 'easy',
+              elevation_gain: Number(routeData.elevation_gain) || 0,
+              images: Array.isArray(routeData.images) ? routeData.images : [],
+              tags: Array.isArray(routeData.tags) ? routeData.tags : [],
+              rating: Number(routeData.rating) || 0,
+              start_location: routeData.start_location,
+              end_location: routeData.end_location,
+              start_point_name: routeData.start_point_name,
+              end_point_name: routeData.end_point_name,
+              waypoints: routeData.waypoints || [],
+              google_maps_url: routeData.google_maps_url,
+            };
+
+            // Ensure creator has all required fields
+            normalizedData.creator = {
+              id: normalizedData.creator.id || parsedData.created_by,
+              full_name: normalizedData.creator.full_name || normalizedData.creator.name,
+              username: normalizedData.creator.username,
+              avatar_url: normalizedData.creator.avatar_url || normalizedData.creator.avatar,
+            };
+
+        // Normalize members/participants with proper status determination
+        console.log('[GROUP RIDE STATUS] Initial load - Normalizing members with status determination...');
+        normalizedData.members = normalizedData.members.map((member: any) => {
+          // Determine status using the same logic as getParticipantStats
+          let status = 'pending'; // Default
+          
+          // Priority 1: Check for explicit status field
+          if (member.status) {
+            const rawStatus = member.status.toLowerCase();
+            if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+              status = 'accepted';
+            } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+              status = 'rejected';
+            } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+              status = 'pending';
+            }
           }
+          // Priority 2: Check for invitation_status field
+          else if (member.invitation_status) {
+            const rawStatus = member.invitation_status.toLowerCase();
+            if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+              status = 'accepted';
+            } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+              status = 'rejected';
+            } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+              status = 'pending';
+            }
+          }
+          // Priority 3: Use joined_at timestamp as indicator of acceptance
+          else if (member.joined_at) {
+            status = 'accepted';
+          }
+          
+          console.log(`[GROUP RIDE STATUS] Initial load - Member ${member.id || member.user_id} status determined: ${status} (from: ${member.status || member.invitation_status || member.joined_at || 'default'})`);
+          
+          return {
+            id: member.id || member.user_id,
+            user_id: member.user_id || member.id,
+            role: member.role || 'participant',
+            joined_at: member.joined_at,
+            status: status, // Use determined status
+            invitation_status: member.invitation_status,
+            profiles: member.profiles || member.user || {
+              id: member.user_id || member.id,
+              full_name: member.full_name || member.name,
+              username: member.username,
+              avatar_url: member.avatar_url || member.avatar,
+            }
+          };
+        });
+
+            setGroupRide(normalizedData);
+            console.log('[GROUP RIDE STATUS] Loaded and normalized group ride from params:', normalizedData);
+            console.log('[GROUP RIDE STATUS] Route data:', normalizedData.route);
+            console.log('[GROUP RIDE STATUS] Route name:', normalizedData.route.name);
+            console.log('[GROUP RIDE STATUS] Route description:', normalizedData.route.description);
+            console.log('[GROUP RIDE STATUS] Route distance:', normalizedData.route.distance);
+            console.log('[GROUP RIDE STATUS] Route duration:', normalizedData.route.duration);
+            console.log('[GROUP RIDE STATUS] Route difficulty:', normalizedData.route.difficulty);
+            console.log('[GROUP RIDE STATUS] Creator data:', normalizedData.creator);
+            console.log('[GROUP RIDE STATUS] Members data:', normalizedData.members);
+        } catch (parseError) {
+          console.error('[GROUP RIDE STATUS] Error parsing group ride data:', parseError);
+          throw new Error('Invalid group ride data');
+        }
         } else if (groupRideId) {
           // Fetch from API if only ID is provided
           console.log('[GROUP RIDE STATUS] Fetching group ride details for ID:', groupRideId);
@@ -130,27 +274,55 @@ const GroupRideStatusScreen = () => {
           }
 
           const fetchedData = await response.json();
-          setGroupRide(fetchedData);
-          console.log('[GROUP RIDE STATUS] Loaded group ride from API:', fetchedData);
+          
+          // 🔍 COMPREHENSIVE DEBUG LOGGING
+          console.log('🔍 [DEBUG] Full API Response:', JSON.stringify(fetchedData, null, 2));
+          console.log('🔍 [DEBUG] Available fields:', Object.keys(fetchedData));
+          console.log('🔍 [DEBUG] Members field exists:', 'members' in fetchedData);
+          console.log('🔍 [DEBUG] Participants field exists:', 'participants' in fetchedData);
+          console.log('🔍 [DEBUG] Route field exists:', 'route' in fetchedData);
+          console.log('🔍 [DEBUG] Routes field exists:', 'routes' in fetchedData);
+          console.log('🔍 [DEBUG] Creator field exists:', 'creator' in fetchedData);
+          console.log('🔍 [DEBUG] Profiles field exists:', 'profiles' in fetchedData);
+          
+          if (fetchedData.members && fetchedData.members.length > 0) {
+            console.log('🔍 [DEBUG] First member structure:', JSON.stringify(fetchedData.members[0], null, 2));
+            console.log('🔍 [DEBUG] Member fields:', Object.keys(fetchedData.members[0]));
+          }
+          
+          if (fetchedData.participants && fetchedData.participants.length > 0) {
+            console.log('🔍 [DEBUG] First participant structure:', JSON.stringify(fetchedData.participants[0], null, 2));
+            console.log('🔍 [DEBUG] Participant fields:', Object.keys(fetchedData.participants[0]));
+          }
+          
+          // Normalize the fetched data as well
+          const normalizedData = {
+            ...fetchedData,
+            route: fetchedData.route || fetchedData.routes || {},
+            creator: fetchedData.creator || fetchedData.profiles || {},
+            members: fetchedData.members || fetchedData.participants || [],
+          };
+
+          setGroupRide(normalizedData);
+          console.log('[GROUP RIDE STATUS] Loaded and normalized group ride from API:', normalizedData);
         } else {
           throw new Error('No group ride data or ID provided');
         }
-      } catch (error) {
-        console.error('[GROUP RIDE STATUS] Error loading group ride:', error);
-        setError(error instanceof Error ? error.message : 'Failed to load group ride');
-      } finally {
-        setLoading(false);
-      }
-    };
+        } catch (loadError) {
+          console.error('[GROUP RIDE STATUS] Error loading group ride:', loadError);
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load group ride');
+        } finally {
+          setLoading(false);
+        }
+      };
 
-    loadGroupRide();
-  }, [groupRideData, groupRideId]);
+      loadGroupRide();
+    }, [groupRideData, groupRideId]);
 
   const refreshGroupRide = async () => {
     if (!groupRide?.id) return;
-    
-    setRefreshing(true);
     try {
+      console.log('[GROUP RIDE STATUS] Refreshing group ride:', groupRide.id);
       const response = await fetch(`${getBaseUrl()}/group-rides/${groupRide.id}`, {
         method: 'GET',
         headers: {
@@ -160,17 +332,122 @@ const GroupRideStatusScreen = () => {
 
       if (response.ok) {
         const updatedData = await response.json();
-        setGroupRide(updatedData);
-        console.log('[GROUP RIDE STATUS] Refreshed group ride data:', updatedData);
-        console.log('[GROUP RIDE STATUS] Refreshed participants:', updatedData.participants);
-        console.log('[GROUP RIDE STATUS] Refreshed members:', updatedData.members);
+        
+        // Normalize the refreshed data using the same logic as initial load
+        const normalizedData = {
+          ...updatedData,
+          route: updatedData.route || updatedData.routes || {},
+          creator: updatedData.creator || updatedData.profiles || {},
+          members: updatedData.members || updatedData.participants || [],
+        };
+
+        // Ensure route has all required fields
+        let routeData = normalizedData.route;
+        
+        // If route data is missing or incomplete, try to fetch it
+        if ((!routeData.name || !routeData.description) && updatedData.route_id) {
+          try {
+            console.log('[GROUP RIDE STATUS] Refreshing - Fetching missing route details for route_id:', updatedData.route_id);
+            const routeDetails = await fetchRouteDetails(updatedData.route_id);
+            routeData = routeDetails;
+            console.log('[GROUP RIDE STATUS] Refreshing - Fetched route details:', routeDetails);
+          } catch (error) {
+            console.error('[GROUP RIDE STATUS] Refreshing - Failed to fetch route details:', error);
+            // Continue with existing route data
+          }
+        }
+        
+        normalizedData.route = {
+          id: routeData.id || updatedData.route_id,
+          name: routeData.name || 'Unknown Route',
+          description: routeData.description || '',
+          distance: Number(routeData.distance) || 0,
+          duration: Number(routeData.duration) || 0,
+          difficulty: routeData.difficulty || 'easy',
+          elevation_gain: Number(routeData.elevation_gain) || 0,
+          images: Array.isArray(routeData.images) ? routeData.images : [],
+          tags: Array.isArray(routeData.tags) ? routeData.tags : [],
+          rating: Number(routeData.rating) || 0,
+          start_location: routeData.start_location,
+          end_location: routeData.end_location,
+          start_point_name: routeData.start_point_name,
+          end_point_name: routeData.end_point_name,
+          waypoints: routeData.waypoints || [],
+          google_maps_url: routeData.google_maps_url,
+        };
+
+        // Ensure creator has all required fields
+        normalizedData.creator = {
+          id: normalizedData.creator.id || updatedData.created_by,
+          full_name: normalizedData.creator.full_name || normalizedData.creator.name,
+          username: normalizedData.creator.username,
+          avatar_url: normalizedData.creator.avatar_url || normalizedData.creator.avatar,
+        };
+
+        // Normalize members/participants with proper status determination
+        console.log('[GROUP RIDE STATUS] Refresh - Normalizing members with status determination...');
+        normalizedData.members = normalizedData.members.map((member: any) => {
+          // Determine status using the same logic as getParticipantStats
+          let status = 'pending'; // Default
+          
+          // Priority 1: Check for explicit status field
+          if (member.status) {
+            const rawStatus = member.status.toLowerCase();
+            if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+              status = 'accepted';
+            } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+              status = 'rejected';
+            } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+              status = 'pending';
+            }
+          }
+          // Priority 2: Check for invitation_status field
+          else if (member.invitation_status) {
+            const rawStatus = member.invitation_status.toLowerCase();
+            if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+              status = 'accepted';
+            } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+              status = 'rejected';
+            } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+              status = 'pending';
+            }
+          }
+          // Priority 3: Use joined_at timestamp as indicator of acceptance
+          else if (member.joined_at) {
+            status = 'accepted';
+          }
+          
+          console.log(`[GROUP RIDE STATUS] Refresh - Member ${member.id || member.user_id} status determined: ${status} (from: ${member.status || member.invitation_status || member.joined_at || 'default'})`);
+          
+          return {
+            id: member.id || member.user_id,
+            user_id: member.user_id || member.id,
+            role: member.role || 'participant',
+            joined_at: member.joined_at,
+            status: status, // Use determined status
+            invitation_status: member.invitation_status,
+            profiles: member.profiles || member.user || {
+              id: member.user_id || member.id,
+              full_name: member.full_name || member.name,
+              username: member.username,
+              avatar_url: member.avatar_url || member.avatar,
+            }
+          };
+        });
+
+        setGroupRide(normalizedData);
+        console.log('[GROUP RIDE STATUS] Refreshed and normalized group ride data:', normalizedData);
+        console.log('[GROUP RIDE STATUS] Refreshed route data:', normalizedData.route);
+        console.log('[GROUP RIDE STATUS] Refreshed creator data:', normalizedData.creator);
+        console.log('[GROUP RIDE STATUS] Refreshed members data:', normalizedData.members);
       } else {
-        console.error('[GROUP RIDE STATUS] Failed to refresh group ride:', response.status);
+        const errorText = await response.text();
+        console.error('[GROUP RIDE STATUS] Failed to refresh group ride:', response.status, errorText);
+        setError(`Failed to refresh group ride: ${response.status}`);
       }
-    } catch (error) {
-      console.error('[GROUP RIDE STATUS] Error refreshing group ride:', error);
-    } finally {
-      setRefreshing(false);
+    } catch (refreshError) {
+      console.error('[GROUP RIDE STATUS] Error refreshing group ride:', refreshError);
+      setError('Failed to refresh group ride. Please try again.');
     }
   };
 
@@ -227,12 +504,16 @@ const GroupRideStatusScreen = () => {
     // Handle multiple possible data structures
     let participants = null;
     
-    if (groupRide?.participants) {
-      participants = groupRide.participants;
-      console.log('[GROUP RIDE STATUS] Using participants array:', participants);
-    } else if (groupRide?.members) {
+    console.log('🔍 [DEBUG] getParticipantStats - groupRide:', groupRide);
+    console.log('🔍 [DEBUG] getParticipantStats - groupRide.members:', groupRide?.members);
+    console.log('🔍 [DEBUG] getParticipantStats - groupRide.participants:', groupRide?.participants);
+    
+    if (groupRide?.members) {
       participants = groupRide.members;
       console.log('[GROUP RIDE STATUS] Using members array:', participants);
+    } else if (groupRide?.participants) {
+      participants = groupRide.participants;
+      console.log('[GROUP RIDE STATUS] Using participants array:', participants);
     } else {
       console.log('[GROUP RIDE STATUS] No participants or members found');
       return { total: 0, accepted: 0, pending: 0, rejected: 0 };
@@ -246,32 +527,46 @@ const GroupRideStatusScreen = () => {
     const stats = participants.reduce((acc, participant) => {
       acc.total++;
       
-      // ✅ FIXED: Use joined_at timestamp to determine status
+      // Improved status determination logic
       let status = 'pending'; // Default
       
-      // If there's a joined_at timestamp, they've accepted the ride
-      if (participant.joined_at) {
+      // Priority 1: Check for explicit status field
+      if (participant.status) {
+        const rawStatus = participant.status.toLowerCase();
+        if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
         status = 'accepted';
-        console.log('[GROUP RIDE STATUS] Has joined_at:', participant.joined_at);
-      }
-      // Check for explicit status fields (fallback)
-      else if (participant.status || participant.invitation_status) {
-        let rawStatus = participant.status || participant.invitation_status;
-        
-        // Normalize status values
-        if (rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
-          status = 'accepted';
-        } else if (rawStatus === 'declined' || rawStatus === 'rejected') {
+        } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
           status = 'rejected';
-        } else if (rawStatus === 'invited' || rawStatus === 'waiting') {
+        } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
           status = 'pending';
         }
       }
+      // Priority 2: Check for invitation_status field
+      else if (participant.invitation_status) {
+        const rawStatus = participant.invitation_status.toLowerCase();
+        if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+          status = 'accepted';
+        } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+          status = 'rejected';
+        } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+          status = 'pending';
+        }
+      }
+      // Priority 3: Use joined_at timestamp as indicator of acceptance
+      else if (participant.joined_at) {
+        status = 'accepted';
+        console.log('[GROUP RIDE STATUS] Has joined_at timestamp, marking as accepted:', participant.joined_at);
+      }
       
-      console.log('[GROUP RIDE STATUS] Participant:', participant);
+      console.log('🔍 [DEBUG] Participant object:', JSON.stringify(participant, null, 2));
+      console.log('🔍 [DEBUG] Participant.status:', participant.status);
+      console.log('🔍 [DEBUG] Participant.invitation_status:', participant.invitation_status);
+      console.log('🔍 [DEBUG] Participant.joined_at:', participant.joined_at);
+      console.log('🔍 [DEBUG] Participant.role:', participant.role);
       console.log('[GROUP RIDE STATUS] Final status:', status);
       
-      if (acc.hasOwnProperty(status)) {
+      // Count the status
+      if (status === 'accepted' || status === 'pending' || status === 'rejected') {
         acc[status]++;
       } else {
         // If status is not one of our expected values, count as pending
@@ -315,9 +610,73 @@ const GroupRideStatusScreen = () => {
     );
   };
 
-  const handleStartRide = () => {
-    // Navigate to ride tracking or start ride functionality
-    console.log('[GROUP RIDE STATUS] Start ride not implemented yet');
+  const handleOpenLink = async (url: string) => {
+    try {
+      const ok = await Linking.canOpenURL(url);
+      if (ok) await Linking.openURL(url);
+      else console.log('[GROUP RIDE STATUS] Cannot open URL:', url);
+    } catch (error) {
+      console.error('[GROUP RIDE STATUS] Error opening URL:', error);
+    }
+  };
+
+  const handleStartRide = async () => {
+    try {
+      console.log('[GROUP RIDE STATUS] Starting ride with route:', routes);
+
+      // 1) Try latest backend route details to get authoritative google_maps_url
+      let mapsUrlFromBackend: string | null = null;
+      const routeId = routes?.id || groupRide?.route_id;
+      if (routeId) {
+        try {
+          const latestRoute = await fetchRouteDetails(routeId);
+          if (latestRoute?.google_maps_url) {
+            mapsUrlFromBackend = latestRoute.google_maps_url;
+          }
+        } catch (e) {
+          console.log('[GROUP RIDE STATUS] Could not fetch latest route details, will fallback:', (e as Error)?.message);
+        }
+      }
+
+      // 2) Prefer backend-provided link, else use any link on the passed data, else generate
+      if (mapsUrlFromBackend) {
+        console.log('[GROUP RIDE STATUS] Opening backend Google Maps URL:', mapsUrlFromBackend);
+        await handleOpenLink(mapsUrlFromBackend);
+        return;
+      }
+
+      if (routes?.google_maps_url) {
+        console.log('[GROUP RIDE STATUS] Opening Google Maps with existing URL:', routes.google_maps_url);
+        await handleOpenLink(routes.google_maps_url);
+        return;
+      }
+
+      // 3) Fallback: build URL identical to route-details implementation
+      let mapsUrl = 'https://www.google.com/maps/dir/';
+
+      if (routes?.waypoints && routes.waypoints.length > 0) {
+        const waypointCoords = routes.waypoints
+          .map((waypoint: any) => `${waypoint.latitude},${waypoint.longitude}`)
+          .join('/');
+        mapsUrl += waypointCoords;
+      } else if (
+        routes?.start_latitude &&
+        routes.start_longitude &&
+        routes.end_latitude &&
+        routes.end_longitude
+      ) {
+        mapsUrl += `${routes.start_latitude},${routes.start_longitude}/${routes.end_latitude},${routes.end_longitude}`;
+      } else {
+        mapsUrl += encodeURIComponent(routes?.name || 'Bike ride');
+      }
+
+      mapsUrl += '/data=!3m1!4b1!4m2!4m1!3e1';
+
+      console.log('[GROUP RIDE STATUS] Opening Google Maps with generated URL:', mapsUrl);
+      await handleOpenLink(mapsUrl);
+    } catch (error) {
+      console.error('[GROUP RIDE STATUS] Error opening Google Maps:', error);
+    }
   };
 
   const renderParticipant = ({ item }: { item: any }) => {
@@ -325,31 +684,40 @@ const GroupRideStatusScreen = () => {
     const userInfo = item.profiles || item.user || {};
     const role = item.role || 'participant';
     
-    // ✅ FIXED: Use joined_at timestamp to determine status
+    // Use the same improved status determination logic as getParticipantStats
     let status = 'pending'; // Default
     
-    // If there's a joined_at timestamp, they've accepted the ride
-    if (item.joined_at) {
+    // Priority 1: Check for explicit status field
+    if (item.status) {
+      const rawStatus = item.status.toLowerCase();
+      if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
       status = 'accepted';
-      console.log('[GROUP RIDE STATUS] Render - Has joined_at:', item.joined_at);
-    }
-    // Check for explicit status fields (fallback)
-    else if (item.status || item.invitation_status) {
-      let rawStatus = item.status || item.invitation_status;
-      
-      // Normalize status values
-      if (rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
-        status = 'accepted';
-      } else if (rawStatus === 'declined' || rawStatus === 'rejected') {
+      } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
         status = 'rejected';
-      } else if (rawStatus === 'invited' || rawStatus === 'waiting') {
+      } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
         status = 'pending';
       }
     }
+    // Priority 2: Check for invitation_status field
+    else if (item.invitation_status) {
+      const rawStatus = item.invitation_status.toLowerCase();
+      if (rawStatus === 'accepted' || rawStatus === 'joined' || rawStatus === 'member' || rawStatus === 'active') {
+        status = 'accepted';
+      } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+        status = 'rejected';
+      } else if (rawStatus === 'pending' || rawStatus === 'invited' || rawStatus === 'waiting') {
+        status = 'pending';
+      }
+    }
+    // Priority 3: Use joined_at timestamp as indicator of acceptance
+    else if (item.joined_at) {
+      status = 'accepted';
+      console.log('[GROUP RIDE STATUS] Render - Has joined_at timestamp, marking as accepted:', item.joined_at);
+    }
     
     // Determine if this is the ride leader (creator)
-    const isRideLeader = item.user_id === groupRide.created_by || 
-                        userInfo.id === groupRide.created_by ||
+    const isRideLeader = item.user_id === groupRide?.created_by || 
+                        userInfo.id === groupRide?.created_by ||
                         role === 'leader';
     
     console.log('[GROUP RIDE STATUS] Rendering participant:', item);
@@ -415,8 +783,8 @@ const GroupRideStatusScreen = () => {
   }
 
   // Handle different possible data structures
-  const routes = groupRide.routes || groupRide.route;
-  const profiles = groupRide.profiles || groupRide.creator;
+  const routes = groupRide.route || groupRide.routes;
+  const profiles = groupRide.creator || groupRide.profiles;
   const stats = getParticipantStats();
   
   // Debug logging for data structure
@@ -454,7 +822,11 @@ const GroupRideStatusScreen = () => {
             </View>
           </View>
 
-          <Text style={styles.routeDescription}>{routes?.description || 'No description available'}</Text>
+          {routes?.description && routes.description.trim() !== '' ? (
+            <Text style={styles.routeDescription}>{routes.description}</Text>
+          ) : (
+            <Text style={styles.routeDescriptionPlaceholder}>No description available for this route</Text>
+          )}
 
           {routes?.images && routes.images.length > 0 && (
             <Image source={{ uri: routes.images[0] }} style={styles.routeImage} />
@@ -484,9 +856,9 @@ const GroupRideStatusScreen = () => {
             {(() => {
               // Try multiple possible data structures for organizer info
               const organizerInfo = profiles || groupRide.creator || {};
-              const avatarUrl = organizerInfo.avatar_url || organizerInfo.avatar;
-              const fullName = organizerInfo.full_name || organizerInfo.name || organizerInfo.username;
-              const username = organizerInfo.username || organizerInfo.name;
+              const avatarUrl = organizerInfo.avatar_url || (organizerInfo as any).avatar;
+              const fullName = organizerInfo.full_name || (organizerInfo as any).name || organizerInfo.username;
+              const username = organizerInfo.username || (organizerInfo as any).name;
               
               console.log('[GROUP RIDE STATUS] Organizer info:', organizerInfo);
               
@@ -540,7 +912,7 @@ const GroupRideStatusScreen = () => {
         <View style={styles.participantsCard}>
           <Text style={styles.participantsTitle}>Participants ({stats.total})</Text>
           {(() => {
-            const participants = groupRide.participants || groupRide.members || [];
+            const participants = groupRide.members || groupRide.participants || [];
             console.log('[GROUP RIDE STATUS] Participants for rendering:', participants);
             
             if (participants && participants.length > 0) {
@@ -593,8 +965,9 @@ const GroupRideStatusScreen = () => {
           <TouchableOpacity
             style={[styles.actionButton, styles.primaryButton]}
             onPress={handleStartRide}
+            activeOpacity={0.8}
           >
-            <Ionicons name="play" size={20} color="#FFFFFF" />
+            <Ionicons name="navigate" size={20} color="#FFFFFF" />
             <Text style={styles.primaryButtonText}>Start Ride</Text>
           </TouchableOpacity>
         )}
@@ -710,6 +1083,14 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     lineHeight: 20,
     marginBottom: theme.spacing.md,
+  },
+  routeDescriptionPlaceholder: {
+    ...theme.typography.body,
+    color: theme.colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: theme.spacing.md,
+    fontStyle: 'italic',
+    opacity: 0.7,
   },
   routeImage: {
     width: '100%',

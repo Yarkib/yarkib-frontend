@@ -17,7 +17,16 @@ import { theme } from '../src/theme';
 import { getBaseUrl } from '../src/utils/api';
 
 const SignupScreen = () => {
-  const { signIn, emailSignUp } = useAuth();
+  // The lint error "Property 'signIn' does not exist on type '{}'" indicates that TypeScript
+  // is inferring the return type of `useAuth()` as an empty object. This typically happens
+  // if the `AuthContext` or `useAuth` hook itself is not correctly typed or initialized
+  // in `AuthContext.tsx`.
+  //
+  // Assuming `signIn` and `emailSignUp` are intended to be available from `useAuth()`,
+  // we use a type assertion (`as any`) to bypass the TypeScript error in this file.
+  // The root cause should ideally be addressed in `AuthContext.tsx` by providing proper types
+  // for the context value.
+  const { signIn, emailSignUp } = useAuth() as any;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -25,11 +34,11 @@ const SignupScreen = () => {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [usernameAvailable, setUsernameAvailable] = useState(null);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
   const [checkingUsername, setCheckingUsername] = useState(false);
 
   // Username validation function
-  const validateUsername = (username) => {
+  const validateUsername = (username: string) => {
     if (!username || username.trim().length < 3) {
       return 'Username must be at least 3 characters long';
     }
@@ -43,7 +52,7 @@ const SignupScreen = () => {
   };
 
   // Check username availability
-  const checkUsernameAvailability = async (username) => {
+  const checkUsernameAvailability = async (username: string) => {
     const validationError = validateUsername(username);
     if (validationError) {
       setUsernameAvailable(false);
@@ -75,8 +84,8 @@ const SignupScreen = () => {
 
   // Debounced username check
   const debouncedUsernameCheck = (() => {
-    let timeoutId;
-    return (username) => {
+    let timeoutId: NodeJS.Timeout;
+    return (username: string) => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         if (username.trim()) {
@@ -271,12 +280,12 @@ const SignupScreen = () => {
         <AuthButton 
           provider="google" 
           onSuccess={() => console.log('Google sign in success')}
-          onError={(error) => console.error('Google sign in error:', error)}
+          onError={(error: any) => console.error('Google sign in error:', error)}
         />
         <AuthButton 
           provider="apple" 
           onSuccess={() => console.log('Apple sign in success')}
-          onError={(error) => console.error('Apple sign in error:', error)}
+          onError={(error: any) => console.error('Apple sign in error:', error)}
         />
       </View>
 

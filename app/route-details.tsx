@@ -1,39 +1,111 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking, FlatList, Dimensions } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../src/theme';
-import { fetchRouteElevation, userRoutesApi } from '../src/utils/api';
+import { fetchRouteDetails, fetchRouteElevation, fetchRouteCoordinates, userRoutesApi } from '../src/utils/api';
 import ElevationChart from '../src/components/ElevationChart';
 import RouteActionButtons from '../src/components/RouteActionButtons';
 import WaypointsSection from '../src/components/WaypointsSection';
+import MapRouteCard from '../src/components/MapRouteCard';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 
 const RouteDetails = () => {
   console.log(`[FRONTEND] RouteDetails: Component mounted`);
   
-  const { routeData } = useLocalSearchParams<{ routeData: string }>();
+  const { routeData, routeId } = useLocalSearchParams<{ routeData?: string; routeId?: string }>();
   const initialRoute = useMemo(() => (routeData ? JSON.parse(routeData) : null), [routeData]);
   
   // ✨ KEY FIX: Make route data mutable with state
   const [route, setRoute] = useState(initialRoute);
+  const [loadingRoute, setLoadingRoute] = useState(!initialRoute); // Only load if no initial data
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [elevationData, setElevationData] = useState<any | null>(null);
   const [loadingElevation, setLoadingElevation] = useState(false);
-  const [elevationError, setElevationError] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const { user, session } = useAuth() as AuthContextType;
   
-  console.log(`[FRONTEND] RouteDetails: Route data:`, route);
+  console.log(`[FRONTEND] RouteDetails:`, route?.id, route?.name, '| Points:', route?.route_points?.length || 0);
 
   // ✨ Simple handler to update route data when buttons change
   const handleRouteUpdate = (updates: { is_saved?: boolean; is_completed?: boolean }) => {
     setRoute((prev: any) => prev ? { ...prev, ...updates } : null);
   };
 
-  
+  // ✨ Fetch route details from backend if not provided
+  useEffect(() => {
+    const fetchRouteData = async () => {
+      // If we have initial route data, don't fetch from backend
+      if (initialRoute) {
+        console.log('[ROUTE DETAILS] Using provided route data, skipping backend fetch');
+        return;
+      }
 
+      // If we have routeId, fetch from backend
+      if (routeId) {
+        try {
+          setLoadingRoute(true);
+          setRouteError(null);
+          console.log('[ROUTE DETAILS] Fetching route details from backend for route:', routeId);
+          
+          const routeData = await fetchRouteDetails(routeId);
+          console.log('[ROUTE DETAILS] Received route data from backend:', routeData);
+          
+          setRoute(routeData);
+        } catch (error) {
+          console.error('[ROUTE DETAILS] Error fetching route details:', error);
+          setRouteError(error instanceof Error ? error.message : 'Failed to load route details');
+        } finally {
+          setLoadingRoute(false);
+        }
+      } else {
+        console.error('[ROUTE DETAILS] No route data or routeId provided');
+        setRouteError('No route information provided');
+        setLoadingRoute(false);
+      }
+    };
 
+    fetchRouteData();
+  }, [routeId, initialRoute]);
+
+  // ✨ Optionally fetch route coordinates if not already present
+  useEffect(() => {
+    const fetchCoordinates = async () => {
+      if (!route?.id) return;
+      
+      // Skip if route already has coordinates
+      if (route.route_points && route.route_points.length > 0) {
+        console.log('[COORDINATES] Route already has coordinates, skipping fetch');
+        return;
+      }
+      
+      try {
+        console.log('[COORDINATES] Fetching coordinates for route:', route.id);
+        const coordinatesData = await fetchRouteCoordinates(route.id);
+        
+        // Update route with coordinates
+        setRoute((prev: any) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            route_points: coordinatesData.coordinates,
+            start_location: coordinatesData.start_location,
+            end_location: coordinatesData.end_location,
+          };
+        });
+        
+        console.log('[COORDINATES] Successfully added coordinates to route');
+      } catch (error: any) {
+        console.log('[COORDINATES] Coordinates endpoint not available, using fallback transformation');
+        console.log('[COORDINATES] Error:', error.message);
+        // This is fine - the transformation logic will handle it
+      }
+    };
+
+    fetchCoordinates();
+  }, [route?.id, route?.route_points]);
 
   // ✨ Fetch route status from database when component mounts
   useEffect(() => {
@@ -92,12 +164,14 @@ const RouteDetails = () => {
       if (!route?.id) return;
       try {
         setLoadingElevation(true);
-        setElevationError(null);
+        console.log('[ELEVATION] Fetching elevation for route:', route.id);
         const data = await fetchRouteElevation(route.id);
         setElevationData(data);
+        console.log('[ELEVATION] State updated successfully');
       } catch (error) {
-        console.error('Failed to load elevation data:', error);
-        setElevationError('Failed to load elevation data');
+        // Log the actual error to help debug
+        console.error('[ELEVATION] Error fetching elevation data:', error);
+        console.log('[ELEVATION] Data not available for this route');
       } finally {
         setLoadingElevation(false);
       }
@@ -120,6 +194,51 @@ const RouteDetails = () => {
     } catch {}
   };
 
+  const handleStartRide = async () => {
+    try {
+      // Use the existing Google Maps URL from the route if available
+      if (route.google_maps_url) {
+        console.log('Opening Google Maps with existing URL:', route.google_maps_url);
+        await handleOpenLink(route.google_maps_url);
+      } else {
+        // Fallback: Create Google Maps URL with waypoints
+        let mapsUrl = 'https://www.google.com/maps/dir/';
+        
+        if (route.waypoints && route.waypoints.length > 0) {
+          // Add all waypoints to the route
+          const waypointCoords = route.waypoints.map((waypoint: any) => 
+            `${waypoint.latitude},${waypoint.longitude}`
+          ).join('/');
+          mapsUrl += waypointCoords;
+        } else if (route.start_latitude && route.start_longitude && route.end_latitude && route.end_longitude) {
+          // Fallback to start and end coordinates
+          mapsUrl += `${route.start_latitude},${route.start_longitude}/${route.end_latitude},${route.end_longitude}`;
+        } else {
+          // If no coordinates available, use the route name for search
+          mapsUrl += encodeURIComponent(route.name);
+        }
+        
+        // Add travel mode (driving, walking, bicycling, transit)
+        mapsUrl += '/data=!3m1!4b1!4m2!4m1!3e1'; // Bicycling mode
+        
+        console.log('Opening Google Maps with generated URL:', mapsUrl);
+        await handleOpenLink(mapsUrl);
+      }
+    } catch (error) {
+      console.error('Error opening Google Maps:', error);
+    }
+  };
+
+  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
+    if (viewableItems.length > 0) {
+      setCurrentImageIndex(viewableItems[0].index || 0);
+    }
+  }).current;
+
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 50,
+  }).current;
+
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty?.toLowerCase()) {
       case 'easy': return '#10B981';
@@ -129,24 +248,82 @@ const RouteDetails = () => {
     }
   };
 
+  // Show loading state while fetching route data
+  if (loadingRoute) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.loadingText}>Loading route details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show error state if route fetch failed
+  if (routeError) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+          <Text style={styles.errorText}>{routeError}</Text>
+          <TouchableOpacity 
+            style={styles.retryButton}
+            onPress={() => {
+              setRouteError(null);
+              setLoadingRoute(true);
+              // Retry logic will be handled by the useEffect
+            }}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!route) return null;
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Hero Image with Overlay Header */}
+        {/* Hero Image Gallery */}
         <View style={styles.heroContainer}>
-          {route.images?.[0] && (
-            <Image source={{ uri: route.images[0] }} style={styles.heroImage} />
+          {route.images && route.images.length > 0 ? (
+            <>
+              <FlatList
+                data={route.images}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
+                keyExtractor={(item, index) => `image-${index}`}
+                renderItem={({ item }) => (
+                  <Image source={{ uri: item }} style={styles.heroImage} />
+                )}
+              />
+              {/* Pagination Dots */}
+              {route.images.length > 1 && (
+                <View style={styles.paginationContainer}>
+                  {route.images.map((_: any, index: number) => (
+                    <View
+                      key={`dot-${index}`}
+                      style={[
+                        styles.paginationDot,
+                        index === currentImageIndex && styles.paginationDotActive,
+                      ]}
+                    />
+                  ))}
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={styles.noImageContainer}>
+              <Ionicons name="image-outline" size={48} color="#CCC" />
+              <Text style={styles.noImageText}>No images available</Text>
+            </View>
           )}
-          <View style={styles.heroOverlay}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <Ionicons name="chevron-back" size={24} color="#000" />
-                </TouchableOpacity>
-            <TouchableOpacity style={styles.shareButton}>
-              <Ionicons name="share-outline" size={22} color="#000" />
-        </TouchableOpacity>
-          </View>
         </View>
 
         {/* Main Content Card */}
@@ -220,37 +397,45 @@ const RouteDetails = () => {
             </View>
           )}
 
-          {/* Elevation Profile Card */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="trending-up-outline" size={22} color="#000" />
-              <Text style={styles.cardTitle}>Elevation Profile</Text>
-            </View>
-            <View style={styles.cardContent}>
-              {loadingElevation ? (
-                <View style={styles.loadingContainer}>
-                  <ActivityIndicator size="small" color="#000" />
-                  <Text style={styles.loadingText}>Loading elevation data...</Text>
+          {/* Route Map Card - Interactive Mapbox visualization */}
+          <MapRouteCard key={route.id} route={route} />
+
+          {/* Elevation Profile Card - Only show if data is available or loading */}
+          {(() => {
+            const hasElevationData = (elevationData?.elevation_profile?.length > 0) || (route.elevation_profile?.length > 0);
+            
+            if (!loadingElevation && !hasElevationData) {
+              return null;
+            }
+            
+            return (
+              <View style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="trending-up-outline" size={22} color="#000" />
+                  <Text style={styles.cardTitle}>Elevation Profile</Text>
                 </View>
-              ) : elevationError ? (
-                <View style={styles.errorContainer}>
-                  <Ionicons name="warning-outline" size={20} color="#EF4444" />
-                  <Text style={styles.errorText}>{elevationError}</Text>
+                <View style={styles.cardContent}>
+                  {loadingElevation ? (
+                    <View style={styles.loadingContainer}>
+                      <ActivityIndicator size="small" color="#000" />
+                      <Text style={styles.loadingText}>Loading elevation data...</Text>
+                    </View>
+                  ) : hasElevationData ? (
+                    <ElevationChart 
+                      data={elevationData?.elevation_profile || route.elevation_profile} 
+                      maxElevation={elevationData?.max_elevation || route.max_elevation}
+                      gpxFileUrl={route.gpx_file_url}
+                    />
+                  ) : (
+                    <View style={styles.emptyContainer}>
+                      <Ionicons name="bar-chart-outline" size={32} color="#D1D5DB" />
+                      <Text style={styles.emptyText}>No elevation data available</Text>
+                    </View>
+                  )}
                 </View>
-              ) : (elevationData?.elevation_profile || route.elevation_profile) ? (
-                <ElevationChart 
-                  data={elevationData?.elevation_profile || route.elevation_profile} 
-                  maxElevation={elevationData?.max_elevation || route.max_elevation}
-                  gpxFileUrl={route.gpx_file_url}
-                />
-              ) : (
-                <View style={styles.emptyContainer}>
-                  <Ionicons name="bar-chart-outline" size={32} color="#D1D5DB" />
-                  <Text style={styles.emptyText}>No elevation data available</Text>
-                </View>
-              )}
-            </View>
-          </View>
+              </View>
+            );
+          })()}
 
           {/* Waypoints Section */}
           <WaypointsSection
@@ -331,6 +516,19 @@ const RouteDetails = () => {
         </View>
       </ScrollView>
 
+      {/* Start Ride Button - Fixed at bottom */}
+      <View style={styles.startRideContainer}>
+        <TouchableOpacity 
+          style={styles.startRideButton} 
+          onPress={handleStartRide}
+          activeOpacity={0.8}
+        >
+          <View style={styles.startRideContent}>
+            <Ionicons name="navigate" size={24} color="#FFFFFF" />
+            <Text style={styles.startRideText}>Start Ride</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
 
     </SafeAreaView>
   );
@@ -351,44 +549,40 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   heroImage: {
-    width: '100%',
-    height: '100%',
+    width: Dimensions.get('window').width,
+    height: 280,
     backgroundColor: '#F3F4F6',
   },
-  heroOverlay: {
+  paginationContainer: {
     position: 'absolute',
-    top: 60,
+    bottom: 16,
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  shareButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     alignItems: 'center',
+  },
+  paginationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    marginHorizontal: 4,
+  },
+  paginationDotActive: {
+    backgroundColor: '#FFFFFF',
+    width: 24,
+  },
+  noImageContainer: {
+    flex: 1,
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+  },
+  noImageText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#999',
   },
 
   // Main Content
@@ -492,26 +686,40 @@ const styles = StyleSheet.create({
 
   // Loading & Error States
   loadingContainer: {
-    flexDirection: 'row',
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    paddingVertical: 20,
+    paddingVertical: 40,
   },
   loadingText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#6B7280',
+    marginTop: 16,
   },
   errorContainer: {
-    flexDirection: 'row',
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 20,
+    paddingVertical: 40,
+    paddingHorizontal: 20,
   },
   errorText: {
-    fontSize: 14,
+    fontSize: 16,
     color: '#EF4444',
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 24,
+  },
+  retryButton: {
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   emptyContainer: {
     alignItems: 'center',
@@ -584,6 +792,48 @@ const styles = StyleSheet.create({
   actionButtonsContainer: {
     marginVertical: theme.spacing.md,
     paddingHorizontal: 20,
+  },
+
+  // Start Ride Button
+  startRideContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    paddingBottom: 34, // Extra padding for safe area
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  startRideButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  startRideContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  startRideText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
   },
 
 });

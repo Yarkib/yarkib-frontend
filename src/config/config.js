@@ -30,6 +30,13 @@ const CONFIG = {
   FEATURES: {
     ENABLE_LOGGING: true,
     ENABLE_ERROR_REPORTING: true,
+  },
+  
+  // Mapbox Configuration
+  MAPBOX: {
+    // The access token will be fetched from backend for security
+    // But you can also store it here for development if needed
+    ACCESS_TOKEN: "pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ", // Will be fetched from backend API
   }
 };
 

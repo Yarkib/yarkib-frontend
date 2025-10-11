@@ -90,8 +90,13 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
         is_major: ['gas_station', 'restaurant', 'coffee_shop'].includes(wp.point_type),
       }));
       
-      setDisplayedWaypoints(transformedWaypoints);
-      console.log(`[WAYPOINTS] Loaded ${transformedWaypoints.length} waypoints`);
+      // Sort waypoints by distance from start to maintain route order
+      const sortedWaypoints = transformedWaypoints.sort((a, b) => 
+        a.distance_from_start - b.distance_from_start
+      );
+      
+      setDisplayedWaypoints(sortedWaypoints);
+      console.log(`[WAYPOINTS] Loaded ${sortedWaypoints.length} waypoints`);
       
     } catch (error: any) {
       console.error('[WAYPOINTS] Error fetching waypoints:', error);
@@ -194,8 +199,13 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
         is_major: ['gas_station', 'restaurant', 'coffee_shop'].includes(wp.point_type),
       }));
       
-      setDisplayedWaypoints(transformedWaypoints);
-      console.log(`[WAYPOINTS] Updated ${transformedWaypoints.length} waypoint times`);
+      // Sort waypoints by distance from start to maintain route order
+      const sortedWaypoints = transformedWaypoints.sort((a, b) => 
+        a.distance_from_start - b.distance_from_start
+      );
+      
+      setDisplayedWaypoints(sortedWaypoints);
+      console.log(`[WAYPOINTS] Updated ${sortedWaypoints.length} waypoint times`);
       
     } catch (error: any) {
       console.error('[WAYPOINTS] Error updating waypoint times:', error);

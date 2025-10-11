@@ -484,7 +484,7 @@ const NotificationsScreen = () => {
         </Text>
         {!showAll && notifications.length > 0 && (
           <Text style={styles.filterHint}>
-            Tap "All" to see read notifications
+            Tap &quot;All&quot; to see read notifications
           </Text>
         )}
       </View>
@@ -569,7 +569,7 @@ const styles = StyleSheet.create({
   filterStatus: {
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.xxl,
+    paddingVertical: theme.spacing.xl * 2,
   },
   emptyTitle: {
     ...theme.typography.h3,

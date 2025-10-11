@@ -56,7 +56,7 @@ interface GroupRideDetails {
     username: string;
     avatar_url?: string;
   };
-  members: GroupRideMember[];
+  members?: GroupRideMember[];
 }
 
 const GroupRideDetailsScreen = () => {
@@ -239,9 +239,9 @@ const GroupRideDetailsScreen = () => {
     );
   }
 
-  const { route, creator, members } = groupRide;
+  const { route, creator, members = [] } = groupRide;
   const isLeader = creator.id === user?.id;
-  const currentUserMember = members.find(member => member.user_id === user?.id);
+  const currentUserMember = members?.find(member => member.user_id === user?.id);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -270,7 +270,7 @@ const GroupRideDetailsScreen = () => {
             <Text style={styles.statusTitle}>Active Group Ride</Text>
           </View>
           <Text style={styles.statusText}>
-            {members.length} member{members.length !== 1 ? 's' : ''} joined
+            {members?.length || 0} member{(members?.length || 0) !== 1 ? 's' : ''} joined
           </Text>
         </View>
 
@@ -341,19 +341,21 @@ const GroupRideDetailsScreen = () => {
         </View>
 
         {/* Members List */}
-        <View style={styles.membersCard}>
-          <View style={styles.membersHeader}>
-            <Text style={styles.membersTitle}>Members ({members.length})</Text>
+        {members && members.length > 0 && (
+          <View style={styles.membersCard}>
+            <View style={styles.membersHeader}>
+              <Text style={styles.membersTitle}>Members ({members.length})</Text>
+            </View>
+            
+            <FlatList
+              data={members}
+              renderItem={renderMember}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+              showsVerticalScrollIndicator={false}
+            />
           </View>
-          
-          <FlatList
-            data={members}
-            renderItem={renderMember}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-            showsVerticalScrollIndicator={false}
-          />
-        </View>
+        )}
 
         {/* Group Ride Details */}
         <View style={styles.detailsCard}>
@@ -490,7 +492,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
   },
   routeCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.card,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.md,
@@ -573,7 +575,7 @@ const styles = StyleSheet.create({
     marginHorizontal: theme.spacing.sm,
   },
   creatorCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.md,
@@ -619,7 +621,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   membersCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.md,
@@ -691,7 +693,7 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   detailsCard: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     borderRadius: theme.borderRadius.lg,
     padding: theme.spacing.lg,
     marginBottom: theme.spacing.xl,

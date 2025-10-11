@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   SafeAreaView,
-  ScrollView,
   ActivityIndicator,
   Alert,
   Image,
@@ -17,7 +16,7 @@ import { router } from 'expo-router';
 import { useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
 import { theme } from '../src/theme';
-import { getBaseUrl } from '../src/utils/api';
+import { groupRideApi, fetchRouteDetails, getBaseUrl } from '../src/utils/api';
 
 interface GroupRide {
   id: string;
@@ -25,25 +24,29 @@ interface GroupRide {
   created_by: string;
   status: string;
   created_at: string;
-  routes: {
+  updated_at: string;
+  route: {
     id: string;
     name: string;
-    description: string;
     distance: number;
     duration: number;
     difficulty: string;
     elevation_gain: number;
-    start_point_name?: string;
-    end_point_name?: string;
     images: string[];
+    tags?: string[];
+    rating?: number;
+    start_location?: any;
+    end_location?: any;
   };
-  profiles: {
+  creator: {
     id: string;
     full_name?: string;
     username?: string;
     avatar_url?: string;
   };
-  members?: Array<{
+  user_role: string;
+  joined_at: string;
+  members?: {
     id: string;
     user_id: string;
     role: string;
@@ -54,7 +57,7 @@ interface GroupRide {
       username?: string;
       avatar_url?: string;
     };
-  }>;
+  }[];
 }
 
 const GroupRidesScreen = () => {
@@ -63,8 +66,9 @@ const GroupRidesScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchingRouteDetails, setFetchingRouteDetails] = useState(false);
 
-  // Fetch all group rides
+  // Fetch user's group rides
   const fetchGroupRides = useCallback(async () => {
     if (!user?.id) {
       setError('Please log in to view group rides');
@@ -76,40 +80,165 @@ const GroupRidesScreen = () => {
       setError(null);
       console.log('[GROUP RIDES] Fetching group rides for user:', user.id);
 
-      const response = await fetch(`${getBaseUrl()}/group-rides`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      // Use the proper API function for user's group rides
+      const data = await groupRideApi.getUserGroupRides(user.id, {
+        status: 'active', // Get active group rides
+        page: 1,
+        limit: 50
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[GROUP RIDES] Fetch failed:', response.status, errorText);
-        throw new Error(`Failed to fetch group rides: ${response.status}`);
-      }
-
-      const data = await response.json();
       console.log('[GROUP RIDES] Raw response:', data);
+      console.log('[GROUP RIDES] Response type:', typeof data);
+      console.log('[GROUP RIDES] Is array:', Array.isArray(data));
+      console.log('[GROUP RIDES] Response keys:', data ? Object.keys(data) : 'null');
 
-      // Handle different response formats
+      // Handle different response formats and normalize data structure
       let rides = [];
       if (Array.isArray(data)) {
         rides = data;
+        console.log('[GROUP RIDES] Using direct array format, count:', rides.length);
       } else if (data.group_rides && Array.isArray(data.group_rides)) {
         rides = data.group_rides;
+        console.log('[GROUP RIDES] Using group_rides property, count:', rides.length);
       } else if (data.data && Array.isArray(data.data)) {
         rides = data.data;
+        console.log('[GROUP RIDES] Using data property, count:', rides.length);
+      } else {
+        console.log('[GROUP RIDES] No valid rides array found in response');
+        console.log('[GROUP RIDES] Available properties:', data ? Object.keys(data) : 'null');
       }
 
-      setGroupRides(rides);
-      console.log('[GROUP RIDES] Loaded group rides:', rides.length);
+      // Normalize the data structure to ensure consistent format
+      setFetchingRouteDetails(true);
+      const normalizedRides = await Promise.all(rides.map(async (ride: any) => {
+        try {
+          console.log('[GROUP RIDES] Processing ride:', ride.id || 'unknown');
+          console.log('[GROUP RIDES] Ride keys:', Object.keys(ride));
+          console.log('[GROUP RIDES] Route data:', ride.route || ride.routes);
+          console.log('[GROUP RIDES] Creator data:', ride.creator || ride.profiles);
+          console.log('[GROUP RIDES] Members data:', ride.members || ride.participants);
+          
+          // 🔧 FIX: Fetch complete group ride data if members are missing
+          let completeRideData = ride;
+          if ((!ride.members || ride.members.length === 0) && (!ride.participants || ride.participants.length === 0) && ride.id) {
+            try {
+              console.log('[GROUP RIDES] Fetching complete group ride data for:', ride.id);
+              const response = await fetch(`${getBaseUrl()}/group-rides/${ride.id}`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+              
+              if (response.ok) {
+                const completeData = await response.json();
+                completeRideData = completeData;
+                console.log('[GROUP RIDES] Fetched complete data:', completeData);
+                console.log('[GROUP RIDES] Complete data members:', completeData.members || completeData.participants);
+              } else {
+                console.log('[GROUP RIDES] Failed to fetch complete data, using original data');
+              }
+            } catch (error) {
+              console.error('[GROUP RIDES] Error fetching complete group ride data:', error);
+              // Continue with original data
+            }
+          }
+          
+          // Ensure route data is properly structured
+          let route = completeRideData.route || completeRideData.routes || {};
+          const creator = completeRideData.creator || completeRideData.profiles || {};
+          const members = completeRideData.members || completeRideData.participants || [];
+          
+          // If route data is missing or incomplete, try to fetch it
+          if ((!route.name || !route.description || !route.distance) && ride.route_id) {
+            try {
+              console.log('[GROUP RIDES] Fetching missing route details for route_id:', ride.route_id);
+              const routeDetails = await fetchRouteDetails(ride.route_id);
+              route = routeDetails;
+              console.log('[GROUP RIDES] Fetched route details:', routeDetails);
+            } catch (error) {
+              console.error('[GROUP RIDES] Failed to fetch route details:', error);
+              // Continue with existing route data
+            }
+          }
+
+          return {
+            ...completeRideData,
+            route: {
+              id: route.id || ride.route_id,
+              name: route.name || 'Unknown Route',
+              description: route.description || '',
+              distance: Number(route.distance) || 0,
+              duration: Number(route.duration) || 0,
+              difficulty: route.difficulty || 'easy',
+              elevation_gain: Number(route.elevation_gain) || 0,
+              images: Array.isArray(route.images) ? route.images : [],
+              tags: Array.isArray(route.tags) ? route.tags : [],
+              rating: Number(route.rating) || 0,
+              start_location: route.start_location,
+              end_location: route.end_location,
+              start_point_name: route.start_point_name,
+              end_point_name: route.end_point_name,
+              waypoints: route.waypoints || [],
+              google_maps_url: route.google_maps_url,
+            },
+            creator: {
+              id: creator.id || ride.created_by,
+              full_name: creator.full_name || creator.name || 'Unknown User',
+              username: creator.username || 'unknown',
+              avatar_url: creator.avatar_url || creator.avatar,
+            },
+            members: Array.isArray(members) ? members.map(member => ({
+              id: member.id || member.user_id,
+              user_id: member.user_id || member.id,
+              role: member.role || 'participant',
+              joined_at: member.joined_at,
+              status: member.status || member.invitation_status,
+              profiles: member.profiles || member.user || {
+                id: member.user_id || member.id,
+                full_name: member.full_name || member.name || 'Unknown User',
+                username: member.username || 'unknown',
+                avatar_url: member.avatar_url || member.avatar,
+              }
+            })) : []
+          };
+        } catch (error) {
+          console.error('[GROUP RIDES] Error normalizing ride data:', error, ride);
+          // Return a minimal valid structure if normalization fails
+          return {
+            ...ride,
+            route: {
+              id: ride.route_id || 'unknown',
+              name: 'Unknown Route',
+              description: '',
+              distance: 0,
+              duration: 0,
+              difficulty: 'easy',
+              elevation_gain: 0,
+              images: [],
+              tags: [],
+              rating: 0,
+            },
+            creator: {
+              id: ride.created_by || 'unknown',
+              full_name: 'Unknown User',
+              username: 'unknown',
+              avatar_url: null,
+            },
+            members: []
+          };
+        }
+      }));
+
+      setGroupRides(normalizedRides);
+      console.log('[GROUP RIDES] Loaded and normalized group rides:', normalizedRides.length);
     } catch (error) {
       console.error('[GROUP RIDES] Error fetching group rides:', error);
       setError('Failed to load group rides. Please try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setFetchingRouteDetails(false);
     }
   }, [user?.id]);
 
@@ -132,12 +261,18 @@ const GroupRidesScreen = () => {
   };
 
   const handleGroupRidePress = (groupRide: GroupRide) => {
-    console.log('[GROUP RIDES] Navigating to group ride details:', groupRide.id);
+    console.log('[GROUP RIDES] Navigating to group ride status:', groupRide.id);
+    console.log('[GROUP RIDES] Passing group ride data:', groupRide);
+    console.log('[GROUP RIDES] Route data being passed:', groupRide.route);
+    console.log('[GROUP RIDES] Creator data being passed:', groupRide.creator);
+    console.log('[GROUP RIDES] Members data being passed:', groupRide.members);
+    
     router.push({
-      pathname: '/group-ride-details',
+      pathname: '/group-ride-status',
       params: {
         groupRideId: groupRide.id,
         groupRideData: JSON.stringify(groupRide),
+        source: 'group-rides',
       },
     });
   };
@@ -188,8 +323,17 @@ const GroupRidesScreen = () => {
 
   const renderGroupRide = ({ item }: { item: GroupRide }) => {
     const participantCount = getParticipantCount(item);
-    const organizerInfo = item.profiles || {};
-    const routeInfo = item.routes || {};
+    const organizerInfo = item.creator || {};
+    const routeInfo = item.route || {};
+    
+    // Debug logging for what's being displayed
+    console.log('[GROUP RIDES] Rendering group ride:', item.id);
+    console.log('[GROUP RIDES] Route info being displayed:', routeInfo);
+    console.log('[GROUP RIDES] Route name:', routeInfo.name);
+    console.log('[GROUP RIDES] Route distance:', routeInfo.distance);
+    console.log('[GROUP RIDES] Route duration:', routeInfo.duration);
+    console.log('[GROUP RIDES] Route difficulty:', routeInfo.difficulty);
+    console.log('[GROUP RIDES] Organizer info being displayed:', organizerInfo);
 
     return (
       <TouchableOpacity
@@ -286,7 +430,9 @@ const GroupRidesScreen = () => {
         </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={styles.loadingText}>Loading group rides...</Text>
+          <Text style={styles.loadingText}>
+            {fetchingRouteDetails ? 'Loading route details...' : 'Loading group rides...'}
+          </Text>
         </View>
       </SafeAreaView>
     );

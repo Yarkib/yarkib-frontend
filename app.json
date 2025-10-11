@@ -2,6 +2,7 @@
   "expo": {
     "name": "Yarkib",
     "slug": "yarkib",
+    "owner": "shabbar26",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -39,6 +40,19 @@
           ]
         }
       ]
+    },
+    "plugins": [
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxMapsDownloadToken": "sk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21na3o3MnI2MDJ0MDJscjU1MGRpaG40bSJ9.JBJ-H6HPUBGk6V0PDphYIg"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ce61d81b-9561-45ac-909f-72477d8651e2"
+      }
     }
   }
 }
