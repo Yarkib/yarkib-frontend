@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking, FlatList, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking, FlatList, Dimensions, Alert, Platform } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../src/theme';
@@ -189,31 +189,91 @@ const RouteDetails = () => {
 
   const handleOpenLink = async (url: string) => {
     try {
+      console.log('[LINK] Attempting to open URL:', url);
+      console.log('[LINK] Platform:', Platform.OS);
+      
+      // On web, just open the URL directly in a new tab
+      if (Platform.OS === 'web') {
+        console.log('[LINK] Web platform - opening in new tab');
+        window.open(url, '_blank');
+        console.log('[LINK] Successfully opened URL in new tab');
+        return;
+      }
+      
+      // On Android, try to open with Linking directly without checking canOpenURL
+      // canOpenURL can return false even when the app is installed due to Android 11+ restrictions
+      if (Platform.OS === 'android') {
+        console.log('[LINK] Android platform - attempting to open with Linking.openURL');
+        try {
+          await Linking.openURL(url);
+          console.log('[LINK] Successfully opened URL on Android');
+          return;
+        } catch (androidError) {
+          console.error('[LINK] Android Linking.openURL failed:', androidError);
+          Alert.alert(
+            'Unable to Open Google Maps',
+            'Please ensure Google Maps is installed on your device.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      }
+      
+      // On iOS, use canOpenURL check
       const ok = await Linking.canOpenURL(url);
-      if (ok) await Linking.openURL(url);
-    } catch {}
+      console.log('[LINK] Can open URL:', ok);
+      if (ok) {
+        await Linking.openURL(url);
+        console.log('[LINK] Successfully opened URL');
+      } else {
+        console.warn('[LINK] Cannot open URL - not supported');
+        Alert.alert('Error', 'Unable to open Google Maps. Please ensure you have Google Maps installed.');
+      }
+    } catch (error) {
+      console.error('[LINK] Error opening URL:', error);
+      Alert.alert('Error', `Failed to open link: ${error}`);
+    }
   };
 
   const handleStartRide = async () => {
     try {
+      console.log('[START RIDE] Button clicked');
+      console.log('[START RIDE] Route data:', {
+        id: route?.id,
+        name: route?.name,
+        hasGoogleMapsUrl: !!route?.google_maps_url,
+        hasWaypoints: route?.waypoints?.length > 0,
+        hasStartLocation: !!route?.start_location,
+        hasEndLocation: !!route?.end_location,
+      });
+
       // Use the existing Google Maps URL from the route if available
       if (route.google_maps_url) {
-        console.log('Opening Google Maps with existing URL:', route.google_maps_url);
+        console.log('[START RIDE] Using existing Google Maps URL:', route.google_maps_url);
         await handleOpenLink(route.google_maps_url);
       } else {
+        console.log('[START RIDE] No google_maps_url found, generating URL...');
+        
         // Fallback: Create Google Maps URL with waypoints
         let mapsUrl = 'https://www.google.com/maps/dir/';
         
         if (route.waypoints && route.waypoints.length > 0) {
+          console.log('[START RIDE] Using waypoints:', route.waypoints.length);
           // Add all waypoints to the route
           const waypointCoords = route.waypoints.map((waypoint: any) => 
             `${waypoint.latitude},${waypoint.longitude}`
           ).join('/');
           mapsUrl += waypointCoords;
+        } else if (route.start_location && route.end_location) {
+          console.log('[START RIDE] Using start and end locations');
+          // Fallback to start and end coordinates
+          mapsUrl += `${route.start_location.latitude},${route.start_location.longitude}/${route.end_location.latitude},${route.end_location.longitude}`;
         } else if (route.start_latitude && route.start_longitude && route.end_latitude && route.end_longitude) {
+          console.log('[START RIDE] Using start/end latitude/longitude');
           // Fallback to start and end coordinates
           mapsUrl += `${route.start_latitude},${route.start_longitude}/${route.end_latitude},${route.end_longitude}`;
         } else {
+          console.log('[START RIDE] No coordinates found, using route name');
           // If no coordinates available, use the route name for search
           mapsUrl += encodeURIComponent(route.name);
         }
@@ -221,11 +281,12 @@ const RouteDetails = () => {
         // Add travel mode (driving, walking, bicycling, transit)
         mapsUrl += '/data=!3m1!4b1!4m2!4m1!3e1'; // Bicycling mode
         
-        console.log('Opening Google Maps with generated URL:', mapsUrl);
+        console.log('[START RIDE] Generated Maps URL:', mapsUrl);
         await handleOpenLink(mapsUrl);
       }
     } catch (error) {
-      console.error('Error opening Google Maps:', error);
+      console.error('[START RIDE] Error:', error);
+      Alert.alert('Error', 'Failed to start ride. Please try again.');
     }
   };
 

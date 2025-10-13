@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Platform,
   Image,
   FlatList,
   Linking,
@@ -612,11 +613,49 @@ const GroupRideStatusScreen = () => {
 
   const handleOpenLink = async (url: string) => {
     try {
+      console.log('[GROUP RIDE STATUS] [LINK] Attempting to open URL:', url);
+      console.log('[GROUP RIDE STATUS] [LINK] Platform:', Platform.OS);
+      
+      // On web, just open the URL directly in a new tab
+      if (Platform.OS === 'web') {
+        console.log('[GROUP RIDE STATUS] [LINK] Web platform - opening in new tab');
+        window.open(url, '_blank');
+        console.log('[GROUP RIDE STATUS] [LINK] Successfully opened URL in new tab');
+        return;
+      }
+      
+      // On Android, try to open with Linking directly without checking canOpenURL
+      // canOpenURL can return false even when the app is installed due to Android 11+ restrictions
+      if (Platform.OS === 'android') {
+        console.log('[GROUP RIDE STATUS] [LINK] Android platform - attempting to open with Linking.openURL');
+        try {
+          await Linking.openURL(url);
+          console.log('[GROUP RIDE STATUS] [LINK] Successfully opened URL on Android');
+          return;
+        } catch (androidError) {
+          console.error('[GROUP RIDE STATUS] [LINK] Android Linking.openURL failed:', androidError);
+          Alert.alert(
+            'Unable to Open Google Maps',
+            'Please ensure Google Maps is installed on your device.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      }
+      
+      // On iOS, use canOpenURL check
       const ok = await Linking.canOpenURL(url);
-      if (ok) await Linking.openURL(url);
-      else console.log('[GROUP RIDE STATUS] Cannot open URL:', url);
+      console.log('[GROUP RIDE STATUS] [LINK] Can open URL:', ok);
+      if (ok) {
+        await Linking.openURL(url);
+        console.log('[GROUP RIDE STATUS] [LINK] Successfully opened URL');
+      } else {
+        console.warn('[GROUP RIDE STATUS] [LINK] Cannot open URL - not supported');
+        Alert.alert('Error', 'Unable to open Google Maps. Please ensure you have Google Maps installed.');
+      }
     } catch (error) {
-      console.error('[GROUP RIDE STATUS] Error opening URL:', error);
+      console.error('[GROUP RIDE STATUS] [LINK] Error opening URL:', error);
+      Alert.alert('Error', `Failed to open link: ${error}`);
     }
   };
 
