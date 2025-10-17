@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking, FlatList, Dimensions, Alert, Platform } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../src/theme';
 import { fetchRouteDetails, fetchRouteElevation, fetchRouteCoordinates, userRoutesApi } from '../src/utils/api';
@@ -241,52 +241,62 @@ const RouteDetails = () => {
       console.log('[START RIDE] Route data:', {
         id: route?.id,
         name: route?.name,
-        hasGoogleMapsUrl: !!route?.google_maps_url,
+        hasRoutePoints: route?.route_points?.length > 0,
         hasWaypoints: route?.waypoints?.length > 0,
         hasStartLocation: !!route?.start_location,
         hasEndLocation: !!route?.end_location,
       });
 
-      // Use the existing Google Maps URL from the route if available
-      if (route.google_maps_url) {
-        console.log('[START RIDE] Using existing Google Maps URL:', route.google_maps_url);
-        await handleOpenLink(route.google_maps_url);
-      } else {
-        console.log('[START RIDE] No google_maps_url found, generating URL...');
-        
-        // Fallback: Create Google Maps URL with waypoints
-        let mapsUrl = 'https://www.google.com/maps/dir/';
-        
-        if (route.waypoints && route.waypoints.length > 0) {
-          console.log('[START RIDE] Using waypoints:', route.waypoints.length);
-          // Add all waypoints to the route
-          const waypointCoords = route.waypoints.map((waypoint: any) => 
-            `${waypoint.latitude},${waypoint.longitude}`
-          ).join('/');
-          mapsUrl += waypointCoords;
-        } else if (route.start_location && route.end_location) {
-          console.log('[START RIDE] Using start and end locations');
-          // Fallback to start and end coordinates
-          mapsUrl += `${route.start_location.latitude},${route.start_location.longitude}/${route.end_location.latitude},${route.end_location.longitude}`;
-        } else if (route.start_latitude && route.start_longitude && route.end_latitude && route.end_longitude) {
-          console.log('[START RIDE] Using start/end latitude/longitude');
-          // Fallback to start and end coordinates
-          mapsUrl += `${route.start_latitude},${route.start_longitude}/${route.end_latitude},${route.end_longitude}`;
-        } else {
-          console.log('[START RIDE] No coordinates found, using route name');
-          // If no coordinates available, use the route name for search
-          mapsUrl += encodeURIComponent(route.name);
-        }
-        
-        // Add travel mode (driving, walking, bicycling, transit)
-        mapsUrl += '/data=!3m1!4b1!4m2!4m1!3e1'; // Bicycling mode
-        
-        console.log('[START RIDE] Generated Maps URL:', mapsUrl);
-        await handleOpenLink(mapsUrl);
+      // Prepare route coordinates for navigation
+      let coordinates: [number, number][] = [];
+      
+      if (route.route_points && route.route_points.length > 0) {
+        // Use route_points if available (already in [lon, lat] format for Mapbox)
+        coordinates = route.route_points.map((point: any) => {
+          if (Array.isArray(point)) {
+            return point;
+          } else if (point.longitude !== undefined && point.latitude !== undefined) {
+            return [point.longitude, point.latitude];
+          }
+          return [0, 0];
+        });
+      } else if (route.waypoints && route.waypoints.length > 0) {
+        // Use waypoints if available
+        coordinates = route.waypoints.map((wp: any) => [wp.longitude, wp.latitude]);
+      } else if (route.start_location && route.end_location) {
+        // Fallback to start and end locations
+        coordinates = [
+          [route.start_location.longitude, route.start_location.latitude],
+          [route.end_location.longitude, route.end_location.latitude],
+        ];
       }
+
+      if (coordinates.length === 0) {
+        Alert.alert(
+          'Route Data Missing',
+          'This route does not have coordinate data for navigation. Please select a different route.'
+        );
+        return;
+      }
+
+      // Navigate to navigation page with route data
+      console.log('[START RIDE] Navigating to navigation page with', coordinates.length, 'coordinates');
+      router.push({
+        pathname: '/navigation',
+        params: {
+          routeData: JSON.stringify({
+            id: route.id,
+            name: route.name,
+            coordinates: coordinates,
+            waypoints: route.waypoints || [],
+            distance: route.distance,
+            duration: route.duration,
+          }),
+        },
+      });
     } catch (error) {
       console.error('[START RIDE] Error:', error);
-      Alert.alert('Error', 'Failed to start ride. Please try again.');
+      Alert.alert('Error', 'Failed to start navigation. Please try again.');
     }
   };
 
