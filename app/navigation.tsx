@@ -7,6 +7,7 @@ import {
   SafeAreaView,
   Alert,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -27,16 +28,19 @@ const NavigationScreen = () => {
   const [route, setRoute] = useState<RouteData | null>(null);
   const [mapboxToken, setMapboxToken] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(true);
+  const [locationPermission, setLocationPermission] = useState(false);
   
-  // Mock navigation state (will be replaced with real GPS later)
-  const [mockState, setMockState] = useState({
-    currentSpeed: 25, // km/h
+  // Real navigation state (updated with GPS)
+  const [navigationState, setNavigationState] = useState({
+    currentSpeed: 0, // km/h
     distanceRemaining: 8.5, // km
     timeRemaining: 20, // minutes
     nextTurnDistance: 0.3, // km
     nextTurnInstruction: 'Turn right onto Main Street',
     nextTurnType: 'turn-right' as const,
-    currentProgress: 0.35, // 35% complete
+    currentProgress: 0, // 0 to 1
+    userLocation: null as { latitude: number; longitude: number } | null,
+    heading: 0, // degrees
   });
 
   // Generate waypoints for progress bar (mock data for now)
@@ -57,7 +61,7 @@ const NavigationScreen = () => {
   
   // Calculate progress between these two waypoints
   const progressBetweenWaypoints = recentCompleted && nextUpcoming && route
-    ? ((mockState.currentProgress * (route.distance || 0) - recentCompleted.distance) / 
+    ? ((navigationState.currentProgress * (route.distance || 0) - recentCompleted.distance) / 
        (nextUpcoming.distance - recentCompleted.distance)) * 100
     : 0;
 
@@ -78,29 +82,78 @@ const NavigationScreen = () => {
     }
   }, [routeData]);
 
-  // Initialize Mapbox
+  // Initialize Mapbox and request location permissions
   useEffect(() => {
-    const token = 'pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ';
-    setMapboxToken(token);
-    MapboxGL.setAccessToken(token);
+    const initializeMapbox = async () => {
+      const token = 'pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ';
+      setMapboxToken(token);
+      MapboxGL.setAccessToken(token);
+      
+      // Request location permissions
+      try {
+        const granted = await MapboxGL.requestAndroidLocationPermissions();
+        setLocationPermission(granted);
+        console.log('[NAVIGATION] Location permission:', granted);
+      } catch (error) {
+        console.error('[NAVIGATION] Error requesting location permission:', error);
+      }
+    };
+    
+    initializeMapbox();
   }, []);
 
-  // Mock location update (will be replaced with real GPS)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (isNavigating) {
-        setMockState(prev => ({
-          ...prev,
-          distanceRemaining: Math.max(0, prev.distanceRemaining - 0.1),
-          nextTurnDistance: Math.max(0, prev.nextTurnDistance - 0.05),
-          timeRemaining: Math.max(0, prev.timeRemaining - 0.5),
-          currentProgress: Math.min(1, prev.currentProgress + 0.02), // Increase progress
-        }));
+  // Handle real-time location updates from Mapbox
+  const handleLocationUpdate = (location: any) => {
+    if (!location || !location.coords) return;
+    
+    const { coords } = location;
+    console.log('[NAVIGATION] Location update:', coords);
+    
+    // Convert speed from m/s to km/h
+    const speedKmh = (coords.speed || 0) * 3.6;
+    
+    // Update navigation state with real GPS data
+    setNavigationState(prev => {
+      const userLoc = { latitude: coords.latitude, longitude: coords.longitude };
+      
+      // Calculate progress if we have route coordinates
+      let progress = prev.currentProgress;
+      if (route && route.coordinates.length > 0) {
+        // Simple progress calculation based on distance from start
+        const startCoord = route.coordinates[0];
+        const endCoord = route.coordinates[route.coordinates.length - 1];
+        
+        // Calculate distance traveled (simplified)
+        const totalDistance = route.distance || 8.5;
+        const distanceTraveled = calculateDistance(
+          startCoord[1], startCoord[0],
+          coords.latitude, coords.longitude
+        );
+        progress = Math.min(1, distanceTraveled / totalDistance);
       }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [isNavigating]);
+      
+      return {
+        ...prev,
+        currentSpeed: Math.round(speedKmh),
+        userLocation: userLoc,
+        heading: coords.heading || 0,
+        currentProgress: progress,
+      };
+    });
+  };
+  
+  // Simple distance calculation helper
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
 
   const handleEndNavigation = () => {
     Alert.alert(
@@ -140,12 +193,48 @@ const NavigationScreen = () => {
     const mins = Math.floor(minutes % 60);
     return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
   };
+  
+  // Calculate ETA based on current speed
+  useEffect(() => {
+    if (navigationState.currentSpeed > 0 && isNavigating) {
+      const interval = setInterval(() => {
+        setNavigationState(prev => {
+          const distancePerSecond = prev.currentSpeed / 3600; // km per second
+          const newDistance = Math.max(0, prev.distanceRemaining - distancePerSecond * 3);
+          const newTime = prev.currentSpeed > 0 
+            ? (newDistance / prev.currentSpeed) * 60 
+            : prev.timeRemaining;
+          
+          return {
+            ...prev,
+            distanceRemaining: newDistance,
+            timeRemaining: newTime,
+          };
+        });
+      }, 3000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [navigationState.currentSpeed, isNavigating]);
 
   if (!route || !mapboxToken) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4285F4" />
           <Text style={styles.loadingText}>Loading navigation...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+  
+  if (!locationPermission) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Ionicons name="location-outline" size={64} color="#5f6368" />
+          <Text style={styles.loadingText}>Requesting location permission...</Text>
+          <Text style={styles.loadingSubtext}>Please enable location to start navigation</Text>
         </View>
       </SafeAreaView>
     );
@@ -179,12 +268,14 @@ const NavigationScreen = () => {
         compassViewPosition={3}
         logoEnabled={false}
         attributionEnabled={false}
+        onUserLocationUpdate={handleLocationUpdate}
       >
         <MapboxGL.Camera
           ref={cameraRef}
-          zoomLevel={17}
-          centerCoordinate={mockUserLocation}
-          pitch={50}
+          followUserLocation={true}
+          followUserMode="course"
+          followZoomLevel={17}
+          followPitch={50}
           animationMode="flyTo"
           animationDuration={600}
         />
@@ -216,16 +307,16 @@ const NavigationScreen = () => {
           </MapboxGL.PointAnnotation>
         )}
 
-        {/* User Location */}
-        <MapboxGL.PointAnnotation
-          id="userLocation"
-          coordinate={mockUserLocation}
-        >
-          <View style={styles.userLocationMarker}>
-            <View style={styles.userLocationPulse} />
-            <View style={styles.userLocationDot} />
-          </View>
-        </MapboxGL.PointAnnotation>
+        {/* Mapbox Native Location Puck (Real GPS) */}
+        <MapboxGL.LocationPuck
+          puckBearingEnabled={true}
+          puckBearing="heading"
+          pulsing={{
+            isEnabled: true,
+            color: '#4285F4',
+            radius: 50,
+          }}
+        />
       </MapboxGL.MapView>
 
       {/* Google Maps Style - Top Turn Card */}
@@ -234,7 +325,7 @@ const NavigationScreen = () => {
           {/* Large Turn Icon */}
           <View style={styles.turnIconLarge}>
             <Ionicons 
-              name={getTurnIcon(mockState.nextTurnType)} 
+              name={getTurnIcon(navigationState.nextTurnType)} 
               size={64} 
               color="#000000" 
             />
@@ -243,20 +334,20 @@ const NavigationScreen = () => {
           {/* Turn Information */}
           <View style={styles.turnInfo}>
             <Text style={styles.distanceLarge}>
-              {(mockState.nextTurnDistance * 1000).toFixed(0)} m
+              {(navigationState.nextTurnDistance * 1000).toFixed(0)} m
             </Text>
             <Text style={styles.streetName} numberOfLines={1}>
-              {mockState.nextTurnInstruction}
+              {navigationState.nextTurnInstruction}
             </Text>
             
             {/* ETA and Distance Row */}
             <View style={styles.etaRow}>
               <Text style={styles.etaText}>
-                {formatTime(mockState.timeRemaining)}
+                {formatTime(navigationState.timeRemaining)}
               </Text>
               <View style={styles.dot} />
               <Text style={styles.etaText}>
-                {mockState.distanceRemaining.toFixed(1)} km
+                {navigationState.distanceRemaining.toFixed(1)} km
               </Text>
             </View>
           </View>
@@ -299,7 +390,7 @@ const NavigationScreen = () => {
               />
             </View>
             <Text style={styles.progressPercentage}>
-              {Math.round(mockState.currentProgress * 100)}%
+              {Math.round(navigationState.currentProgress * 100)}%
             </Text>
           </View>
 
@@ -320,9 +411,9 @@ const NavigationScreen = () => {
 
       {/* Google Maps Style - Bottom Actions */}
       <View style={styles.bottomActionsContainer}>
-        {/* Speed Display */}
+        {/* Speed Display - Real GPS Speed */}
         <View style={styles.speedCard}>
-          <Text style={styles.speedNumber}>{mockState.currentSpeed}</Text>
+          <Text style={styles.speedNumber}>{navigationState.currentSpeed}</Text>
           <Text style={styles.speedUnit}>km/h</Text>
         </View>
 
@@ -357,6 +448,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#5f6368',
     marginTop: 12,
+    textAlign: 'center',
+  },
+  loadingSubtext: {
+    fontSize: 14,
+    color: '#9AA0A6',
+    marginTop: 8,
+    textAlign: 'center',
+    paddingHorizontal: 32,
   },
   
   // Google Maps Style - Top Card
