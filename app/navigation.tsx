@@ -252,9 +252,6 @@ const NavigationScreen = () => {
     },
   };
 
-  // Mock user location (will be replaced with real GPS)
-  const mockUserLocation: [number, number] = route.coordinates[0] || [0, 0];
-
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -273,7 +270,7 @@ const NavigationScreen = () => {
         <MapboxGL.Camera
           ref={cameraRef}
           followUserLocation={true}
-          followUserMode="course"
+          followUserMode={MapboxGL.UserTrackingMode.FollowWithHeading}
           followZoomLevel={17}
           followPitch={50}
           animationMode="flyTo"

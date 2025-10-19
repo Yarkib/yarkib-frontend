@@ -28,7 +28,7 @@ const WelcomeScreen = () => {
           style={styles.button}
           onPress={() => router.push('/login')}
         >
-          <Text style={styles.buttonText}>Let's Get Started</Text>
+          <Text style={styles.buttonText}>Let&#39;s Get Started</Text>
         </TouchableOpacity>
       </View>
     </View>
