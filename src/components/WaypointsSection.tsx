@@ -1,19 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Switch,
-  ScrollView,
-  Alert,
-  Animated,
-  TextInput,
-  ActivityIndicator,
-} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Waypoint, StartTimeSettings } from '../types/waypoint';
+import React, { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    Animated,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
+} from 'react-native';
 import { theme } from '../theme';
+import { StartTimeSettings, Waypoint } from '../types/waypoint';
 import { waypointsApi } from '../utils/api';
 import WaypointItem from './WaypointItem';
 
@@ -87,14 +86,14 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
           longitude: wp.lon,
         },
         address: wp.description,
-        is_major: ['gas_station', 'restaurant', 'coffee_shop'].includes(wp.point_type),
+        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
       }));
-      
       // Sort waypoints by distance from start to maintain route order
-      const sortedWaypoints = transformedWaypoints.sort((a, b) => 
-        a.distance_from_start - b.distance_from_start
+      const sortedWaypoints = transformedWaypoints.sort(
+        (a: typeof transformedWaypoints[0], b: typeof transformedWaypoints[0]) =>
+          a.distance_from_start - b.distance_from_start
       );
-      
+
       setDisplayedWaypoints(sortedWaypoints);
       console.log(`[WAYPOINTS] Loaded ${sortedWaypoints.length} waypoints`);
       
@@ -179,9 +178,9 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
       // Fetch updated waypoints from API
       let waypointsData;
       if (showAllWaypoints) {
-        waypointsData = await waypointsApi.getAllWaypoints(routeId, startTimeISO);
+        waypointsData = await waypointsApi.getAllWaypoints(routeId, startTimeISO as any);
       } else {
-        waypointsData = await waypointsApi.getMajorWaypoints(routeId, startTimeISO);
+        waypointsData = await waypointsApi.getMajorWaypoints(routeId, startTimeISO as any);
       }
       
       // Transform backend data to frontend format
@@ -196,11 +195,11 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
           longitude: wp.lon,
         },
         address: wp.description,
-        is_major: ['gas_station', 'restaurant', 'coffee_shop'].includes(wp.point_type),
+        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
       }));
       
       // Sort waypoints by distance from start to maintain route order
-      const sortedWaypoints = transformedWaypoints.sort((a, b) => 
+      const sortedWaypoints = transformedWaypoints.sort((a: any, b: any) => 
         a.distance_from_start - b.distance_from_start
       );
       
@@ -503,7 +502,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     paddingVertical: theme.spacing.sm,
     paddingHorizontal: theme.spacing.md,
     marginHorizontal: theme.spacing.lg,
@@ -542,6 +541,16 @@ const styles = StyleSheet.create({
   waypointsList: {
     paddingBottom: theme.spacing.md,
   },
+  loadingContainer: {
+    alignItems: 'center',
+    paddingVertical: theme.spacing.xl,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  loadingText: {
+    ...theme.typography.body,
+    color: theme.colors.textSecondary,
+    marginTop: theme.spacing.sm,
+  },
   emptyContainer: {
     alignItems: 'center',
     paddingVertical: theme.spacing.xl,
@@ -578,7 +587,7 @@ const styles = StyleSheet.create({
   },
   // Time Dropdown Styles
   timeDropdownContainer: {
-    backgroundColor: theme.colors.cardBackground,
+    backgroundColor: theme.colors.background,
     marginHorizontal: theme.spacing.lg,
     marginBottom: theme.spacing.sm,
     borderRadius: theme.borderRadius.md,
@@ -670,3 +679,4 @@ const styles = StyleSheet.create({
 });
 
 export default WaypointsSection;
+

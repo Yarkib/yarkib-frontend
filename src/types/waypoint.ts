@@ -1,7 +1,7 @@
 export interface Waypoint {
   id: string;
   name: string;
-  category: 'gas_station' | 'restaurant' | 'coffee_shop' | 'other';
+  category: 'gas_station' | 'restaurant' | 'coffee_shop' | 'hotel' | 'shop' | 'other';
   estimated_arrival_time: string; // Format: "HH:MM" (24-hour)
   distance_from_start: number; // Distance in kilometers from route start
   coordinates: {

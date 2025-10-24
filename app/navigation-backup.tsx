@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import MapboxGL from '@rnmapbox/maps';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -58,6 +60,15 @@ const NavigationScreen = () => {
   const [hasAttemptedNavToStart, setHasAttemptedNavToStart] = useState(false);
   const [followUserLocation, setFollowUserLocation] = useState(true);
   
+  // Image picker state
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [showImagePicker, setShowImagePicker] = useState(false);
+  
+  // Waypoints list state
+  const [allWaypoints, setAllWaypoints] = useState<any[]>([]);
+  const [showWaypointsList, setShowWaypointsList] = useState(false);
+  const [loadingAllWaypoints, setLoadingAllWaypoints] = useState(false);
+  
   // Navigation thresholds
   const NAVIGATION_THRESHOLDS = {
     AT_START: 0.15,        // 150 meters - auto-skip
@@ -69,15 +80,6 @@ const NavigationScreen = () => {
   // Major points state
   const [majorPoints, setMajorPoints] = useState<MajorPoint[]>([]);
   const [loadingMajorPoints, setLoadingMajorPoints] = useState(false);
-  
-  // Navigation waypoints state
-  const [navigationWaypoints, setNavigationWaypoints] = useState<any[]>([]);
-  const [loadingNavigationWaypoints, setLoadingNavigationWaypoints] = useState(false);
-  
-  // Scroll snap-back state
-  const [scrollTimeout, setScrollTimeout] = useState<NodeJS.Timeout | null>(null);
-  const [isScrolling, setIsScrolling] = useState(false);
-  const scrollViewRef = useRef<ScrollView>(null);
   
   // Proximity thresholds for major points
   const MAJOR_POINT_THRESHOLDS = {
@@ -111,96 +113,41 @@ const NavigationScreen = () => {
     currentStepIndex: 0,
   });
 
-  // Mock data for demonstration
-  const mockCurrentPosition = 35; // 35% through the route
-  
   // Get major points progress (real data from database)
   const completedPoints = majorPoints.filter(p => p.status === 'completed');
-  const totalPoints = majorPoints.length;
-  const progressPercentage = totalPoints > 0 ? (completedPoints.length / totalPoints) * 100 : 0;
+  const upcomingPoints = majorPoints.filter(p => p.status === 'upcoming' || p.status === 'approaching');
   
-  // Calculate progress based on current position for the progress line
-  // Since we reversed the order (destination at top, start at bottom), 
-  // the progress line should show completion from bottom to current position
-  const currentPositionProgress = mockCurrentPosition; // 35% from bottom
-  const mockTimeToNextStop = 12; // 12 minutes to next stop
-  const mockNextStopName = "Shell Gas Station";
+  const recentCompleted = completedPoints.length > 0 
+    ? completedPoints[completedPoints.length - 1] 
+    : null;
+    
+  const nextUpcoming = upcomingPoints.length > 0 
+    ? upcomingPoints[0] 
+    : null;
   
-  // Calculate current position percentage (using mock data for now)
-  const currentPositionPercentage = totalPoints > 0 ? mockCurrentPosition : 0;
+  // Calculate progress between these two waypoints
+  const progressBetweenWaypoints = recentCompleted && nextUpcoming && route
+    ? ((navigationState.currentProgress * (route.distance || 0) - recentCompleted.distance_from_start) / 
+       (nextUpcoming.distance_from_start - recentCompleted.distance_from_start)) * 100
+    : 0;
 
   const mapRef = useRef<MapboxGL.MapView>(null);
   const cameraRef = useRef<MapboxGL.Camera>(null);
 
-  // Scroll snap-back functionality
-  const handleScroll = () => {
-    setIsScrolling(true);
-    
-    // Clear existing timeout
-    if (scrollTimeout) {
-      clearTimeout(scrollTimeout);
-    }
-    
-    // Set new timeout to snap back after scrolling stops
-    const timeout = setTimeout(() => {
-      snapToCurrentPosition();
-      setIsScrolling(false);
-    }, 2000); // 2 seconds after scrolling stops
-    
-    setScrollTimeout(timeout);
-  };
-
-  const snapToCurrentPosition = () => {
-    if (!scrollViewRef.current) return;
-    
-    // Find the current waypoint index (where bike icon is)
-    const allWaypoints = [
-      ...majorPoints.map(p => ({ ...p, isMajor: true })),
-      ...navigationWaypoints.map(p => ({ ...p, isMajor: false }))
-    ].sort((a, b) => b.distance_from_start - a.distance_from_start);
-    
-    const currentPosition = mockCurrentPosition; // 35%
-    const waypointProgress = (index: number) => (index / (allWaypoints.length - 1)) * 100;
-    
-    // Find the waypoint that contains the current position
-    let targetIndex = 0;
-    for (let i = 0; i < allWaypoints.length - 1; i++) {
-      const currentProgress = waypointProgress(i);
-      const nextProgress = waypointProgress(i + 1);
-      
-      if (currentPosition >= currentProgress && currentPosition < nextProgress) {
-        targetIndex = i;
-        break;
-      }
-    }
-    
-    // Calculate scroll position to center on the target waypoint
-    const itemHeight = 32; // More accurate height per waypoint item
-    const containerHeight = 120; // Height of the scroll container
-    const visibleItems = Math.floor(containerHeight / itemHeight);
-    
-    // Center the target waypoint in the visible area
-    const centerOffset = Math.floor(visibleItems / 2);
-    const scrollPosition = Math.max(0, (targetIndex - centerOffset) * itemHeight);
-    
-    // Smooth scroll to the target position
-    scrollViewRef.current.scrollTo({
-      y: scrollPosition,
-      animated: true,
-    });
-  };
-
   // Parse route data
   useEffect(() => {
+    console.log('[NAVIGATION] Route data received:', routeData);
     if (routeData) {
       try {
         const parsedRoute = JSON.parse(routeData);
         setRoute(parsedRoute);
-        console.log('[NAVIGATION] Route loaded:', parsedRoute);
+        console.log('[NAVIGATION] Route loaded successfully:', parsedRoute);
       } catch (error) {
         console.error('[NAVIGATION] Error parsing route data:', error);
         Alert.alert('Error', 'Failed to load route data');
       }
+    } else {
+      console.log('[NAVIGATION] No route data provided');
     }
   }, [routeData]);
 
@@ -401,6 +348,91 @@ const NavigationScreen = () => {
     setFollowUserLocation(true);
   };
 
+  // Image picker functions
+  const pickImage = async () => {
+    try {
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library to select images.');
+        return;
+      }
+
+      // Open gallery
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 1,
+        allowsMultipleSelection: true,
+      });
+
+      if (!result.canceled && result.assets) {
+        const newImages = result.assets.map((asset: any) => asset.uri);
+        setSelectedImages(prev => [...prev, ...newImages]);
+        console.log('[IMAGE PICKER] Selected images:', newImages.length);
+        
+    Alert.alert(
+          'Images Selected',
+          `Added ${newImages.length} image(s) to your collection.`,
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('[IMAGE PICKER] Error:', error);
+      Alert.alert('Error', 'Failed to select images. Please try again.');
+    }
+  };
+
+  const takePhoto = async () => {
+    try {
+      // Request camera permission
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your camera to take photos.');
+        return;
+      }
+
+      // Open camera
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const newImage = result.assets[0].uri;
+        setSelectedImages(prev => [...prev, newImage]);
+        console.log('[CAMERA] Photo taken:', newImage);
+        
+        Alert.alert(
+          'Photo Taken',
+          'Photo added to your collection.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('[CAMERA] Error:', error);
+      Alert.alert('Error', 'Failed to take photo. Please try again.');
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const showImageOptions = () => {
+    Alert.alert(
+      'Add Image',
+      'Choose how you want to add an image',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Gallery', onPress: pickImage },
+        { text: 'Camera', onPress: takePhoto },
+      ]
+    );
+  };
+
   const getTurnIcon = (turnType: string) => {
     const iconMap: { [key: string]: any } = {
       'turn-right': 'arrow-forward',
@@ -411,35 +443,19 @@ const NavigationScreen = () => {
     return iconMap[turnType] || 'arrow-forward';
   };
   
-  // Helper to get icon for major point type (Ionicons)
+  // Helper to get icon for major point type
   const getPointIcon = (pointType: string): string => {
     const iconMap: { [key: string]: string } = {
-      'gas_station': 'car',
-      'restaurant': 'restaurant',
-      'coffee_shop': 'cafe',
-      'scenic_point': 'camera',
-      'rest_area': 'pause-circle',
-      'custom': 'location',
+      'gas_station': '⛽',
+      'restaurant': '🍽️',
+      'coffee_shop': '☕',
+      'hotel': '🏨',
+      'shop': '🛍️',
+      'scenic_point': '🏔️',
+      'rest_area': '🅿️',
+      'custom': '📍',
     };
-    return iconMap[pointType] || 'location';
-  };
-
-  // Helper to get icon for navigation waypoint type
-  const getNavWaypointIcon = (pointType: string): string => {
-    // For navigation waypoints, use generic navigation icons based on point type
-    const iconMap: { [key: string]: string } = {
-      'turn': 'arrow-forward',
-      'straight': 'arrow-up',
-      'merge': 'git-merge',
-      'exit': 'exit',
-      'roundabout': 'refresh',
-      'junction': 'git-branch',
-      'traffic_light': 'stop-circle',
-      'stop_sign': 'stop',
-      'yield': 'pause',
-      'other': 'navigate',
-    };
-    return iconMap[pointType] || 'navigate';
+    return iconMap[pointType] || '📍';
   };
   
   // Helper to get color for point status
@@ -657,88 +673,81 @@ const NavigationScreen = () => {
     return () => clearInterval(interval);
   }, [navigationPhase, navigationState.userLocation, hasAutoTransitioned, showSkipButton, isNavigating]);
 
-
-  // Fetch all waypoints (major + navigation) when route loads
+  // Fetch major points when route loads
   useEffect(() => {
-    const loadAllWaypoints = async () => {
+    const loadMajorPoints = async () => {
       if (!route?.id) return;
       
       try {
         setLoadingMajorPoints(true);
-        setLoadingNavigationWaypoints(true);
-        console.log('[ALL WAYPOINTS] Fetching for route:', route.id);
+        console.log('[MAJOR POINTS] Fetching for route:', route.id);
         
-        // Use the same API as WaypointsSection component
-        const allWaypointsData = await waypointsApi.getAllWaypoints(route.id);
+        const points = await waypointsApi.getMajorWaypoints(route.id);
         
-        // Transform backend data to frontend format (same as WaypointsSection)
-        const transformedWaypoints = allWaypointsData.map((wp: any) => ({
-          id: wp.id,
-          name: wp.name,
-          point_type: wp.point_type || 'other',
-          distance_from_start: wp.distance_from_start || 0,
-          lat: wp.lat,
-          lon: wp.lon,
-          is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
-          status: 'upcoming' as const, // Initialize all as upcoming
-        }));
-        
-        // Sort waypoints by distance from start to maintain route order
-        const sortedWaypoints = transformedWaypoints.sort(
-          (a: any, b: any) => b.distance_from_start - a.distance_from_start
-        );
-        
-        // Separate major waypoints from navigation waypoints
-        const majorPoints = sortedWaypoints.filter((wp: any) => wp.is_major);
-        const navigationPoints = sortedWaypoints.filter((wp: any) => !wp.is_major);
-        
-        // Update major points with some mock completed for demo
-        const initializedMajorPoints = majorPoints.map((point: any, index: number) => ({
+        // Initialize all points as 'upcoming'
+        const initializedPoints: MajorPoint[] = points.map((point: any) => ({
           ...point,
-          status: index < 1 ? 'completed' as const : 'upcoming' as const, // Mock: first point completed
+          status: 'upcoming' as const,
         }));
         
-        // Update navigation points with some mock completed for demo
-        const initializedNavPoints = navigationPoints.map((point: any, index: number) => ({
-          ...point,
-          status: index < 2 ? 'completed' as const : 'upcoming' as const, // Mock: first two completed
-        }));
+        // Sort by distance from start
+        initializedPoints.sort((a, b) => a.distance_from_start - b.distance_from_start);
         
-        setMajorPoints(initializedMajorPoints);
-        setNavigationWaypoints(initializedNavPoints);
-        
-        console.log('[ALL WAYPOINTS] Loaded:', {
-          major: initializedMajorPoints.length,
-          navigation: initializedNavPoints.length,
-          total: sortedWaypoints.length
-        });
-        
-        // Auto-snap to current position after waypoints are loaded
-        setTimeout(() => {
-          snapToCurrentPosition();
-        }, 500);
+        setMajorPoints(initializedPoints);
+        console.log('[MAJOR POINTS] Loaded:', initializedPoints.length, 'points');
         
       } catch (error) {
-        console.error('[ALL WAYPOINTS] Error loading:', error);
+        console.error('[MAJOR POINTS] Error loading:', error);
+        // Fallback to empty array - navigation will still work
         setMajorPoints([]);
-        setNavigationWaypoints([]);
       } finally {
         setLoadingMajorPoints(false);
-        setLoadingNavigationWaypoints(false);
       }
     };
     
-    loadAllWaypoints();
+    loadMajorPoints();
   }, [route?.id]);
 
-  // Cleanup scroll timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout);
-      }
-    };
-  }, [scrollTimeout]);
+  // Fetch all waypoints (major + navigation)
+  const loadAllWaypoints = async () => {
+    if (!route?.id) return;
+    
+    try {
+      setLoadingAllWaypoints(true);
+      console.log('[ALL WAYPOINTS] Fetching for route:', route.id);
+      
+      const allPoints = await waypointsApi.getAllWaypoints(route.id);
+      
+      // Transform and sort waypoints
+      const transformedWaypoints = allPoints.map((wp: any) => ({
+        id: wp.id,
+        name: wp.name,
+        category: wp.point_type || 'other',
+        estimated_arrival_time: wp.estimated_arrival_time_formatted || wp.estimated_arrival_time,
+        distance_from_start: wp.distance_from_start || 0,
+        coordinates: {
+          latitude: wp.lat,
+          longitude: wp.lon,
+        },
+        address: wp.description,
+        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
+      }));
+      
+      // Sort by distance from start
+      const sortedWaypoints = transformedWaypoints.sort(
+        (a: any, b: any) => a.distance_from_start - b.distance_from_start
+      );
+      
+      setAllWaypoints(sortedWaypoints);
+      console.log('[ALL WAYPOINTS] Loaded', sortedWaypoints.length, 'waypoints');
+      
+    } catch (error) {
+      console.error('[ALL WAYPOINTS] Error loading waypoints:', error);
+      setAllWaypoints([]);
+    } finally {
+      setLoadingAllWaypoints(false);
+    }
+  };
 
   // Auto-dismiss start reminder when user gets close to route start
   useEffect(() => {
@@ -1330,119 +1339,60 @@ const NavigationScreen = () => {
             </View>
           )}
           
-          {/* Show all waypoints */}
-          {!loadingMajorPoints && majorPoints.length > 0 && (
+          {/* Show major points progress */}
+          {!loadingMajorPoints && majorPoints.length > 0 && recentCompleted && nextUpcoming && (
             <>
-              {/* Progress Line and Waypoints Side by Side */}
-              <View style={styles.progressAndWaypointsContainer}>
+              {/* Recent Completed Point */}
+          <View style={styles.waypointSection}>
+            <View style={styles.waypointIconContainer}>
+                  <Text style={styles.pointEmoji}>{getPointIcon(recentCompleted.point_type)}</Text>
+            </View>
+            <View style={styles.waypointTextContainer}>
+              <Text style={styles.waypointStatus}>Passed</Text>
+              <Text style={styles.waypointName} numberOfLines={1}>
+                {recentCompleted.name}
+              </Text>
+                  <Text style={styles.waypointDistance}>
+                    {recentCompleted.distance_from_start.toFixed(1)} km
+              </Text>
+            </View>
+          </View>
 
-                {/* Scrollable Waypoints with Bike Icon - Right side */}
-              <ScrollView 
-                ref={scrollViewRef}
-                style={styles.waypointsScrollView}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.waypointsScrollContent}
-                onScroll={handleScroll}
-                scrollEventThrottle={16}
-                onScrollBeginDrag={() => setIsScrolling(true)}
-                onScrollEndDrag={() => {
-                  // Start timeout when user stops dragging
-                  if (scrollTimeout) clearTimeout(scrollTimeout);
-                  const timeout = setTimeout(() => {
-                    snapToCurrentPosition();
-                    setIsScrolling(false);
-                  }, 2000);
-                  setScrollTimeout(timeout);
-                }}
-              >
-                {/* Combine and sort all waypoints by distance */}
-                {(() => {
-                  const allWaypoints = [
-                    ...majorPoints.map(p => ({ ...p, isMajor: true })),
-                    ...navigationWaypoints.map(p => ({ ...p, isMajor: false }))
-                  ].sort((a, b) => b.distance_from_start - a.distance_from_start);
-                  
-                  return allWaypoints.map((point, index) => {
-                    // Calculate bike position based on current progress
-                    const currentPosition = mockCurrentPosition; // 35%
-                    const waypointProgress = (index / (allWaypoints.length - 1)) * 100;
-                    const nextWaypointProgress = ((index + 1) / (allWaypoints.length - 1)) * 100;
-                    
-                    // Show bike if current position is between this waypoint and the next
-                    const shouldShowBike = currentPosition >= waypointProgress && 
-                                          currentPosition < nextWaypointProgress && 
-                                          index < allWaypoints.length - 1;
-                    
-                    // Determine waypoint status based on reversed order
-                    // Points below bike (closer to start) = completed, points above = upcoming
-                    const isCompleted = waypointProgress > currentPosition;
-                    
-                    return (
-                      <View key={point.id}>
-                        <View style={[
-                          styles.waypointSection,
-                          !point.isMajor && styles.navWaypointSection
-                        ]}>
-                          <View style={[
-                            styles.waypointIconContainer,
-                            !point.isMajor && styles.navWaypointIconContainer
-                          ]}>
-                            <Ionicons 
-                              name={point.isMajor 
-                                ? getPointIcon(point.point_type) as any
-                                : getNavWaypointIcon(point.point_type) as any
-                              } 
-                              size={point.isMajor ? 12 : 8} 
-                              color={isCompleted 
-                                ? "#34A853"  // Green for completed
-                                : point.isMajor 
-                                  ? "#5f6368"  // Dark gray for major waypoints
-                                  : "#B0BEC5"  // Light gray for navigation waypoints
-                              } 
-                            />
-                          </View>
-                          <View style={styles.waypointTextContainer}>
-                            <Text style={[
-                              point.isMajor ? styles.waypointStatusNext : styles.navWaypointStatus,
-                              isCompleted && styles.waypointStatus
-                            ]}>
-                              {isCompleted ? 'Passed' : 
-                               point.isMajor ? 'Next' : 'Nav'}
-                            </Text>
-                            <Text style={[
-                              point.isMajor ? styles.waypointName : styles.navWaypointName,
-                              isCompleted && styles.completedWaypointName
-                            ]} numberOfLines={1}>
-                              {point.name}
-                            </Text>
-                            <Text style={[
-                              point.isMajor ? styles.waypointDistance : styles.navWaypointDistance,
-                              isCompleted && styles.completedWaypointDistance
-                            ]}>
-                              {point.distance_from_start.toFixed(1)} km
-                            </Text>
-                          </View>
-                        </View>
-                        
-                        {/* Bike Icon with Time to Next Stop */}
-                        {shouldShowBike && (
-                          <View style={styles.bikeIconContainer}>
-                            <View style={styles.bikeIcon}>
-                              <Ionicons name="bicycle" size={16} color="#FF6B35" />
-                            </View>
-                            <Text style={styles.bikeIconText}>You are here</Text>
-                            <View style={styles.timeToNextStop}>
-                              <Text style={styles.timeToNextStopLabel}>Next: {mockNextStopName}</Text>
-                              <Text style={styles.timeToNextStopTime}>{mockTimeToNextStop} min</Text>
-                            </View>
-                          </View>
-                        )}
-                      </View>
-                    );
-                  });
-                })()}
-              </ScrollView>
-              </View>
+          {/* Progress Line */}
+          <View style={styles.progressLineContainer}>
+            <View style={styles.progressLine}>
+              <View 
+                style={[
+                  styles.progressLineActive, 
+                  { height: `${Math.min(100, Math.max(0, progressBetweenWaypoints))}%` }
+                ]} 
+              />
+            </View>
+            <Text style={styles.progressPercentage}>
+                  {completedPoints.length}/{majorPoints.length}
+            </Text>
+          </View>
+
+              {/* Next Upcoming Point */}
+          <View style={styles.waypointSection}>
+            <View style={styles.waypointIconContainer}>
+                  <Text style={styles.pointEmoji}>{getPointIcon(nextUpcoming.point_type)}</Text>
+            </View>
+            <View style={styles.waypointTextContainer}>
+                  <Text style={[
+                    styles.waypointStatusNext,
+                    nextUpcoming.status === 'approaching' && styles.waypointStatusApproaching
+                  ]}>
+                    {nextUpcoming.status === 'approaching' ? 'Approaching' : 'Next'}
+                  </Text>
+              <Text style={styles.waypointName} numberOfLines={1}>
+                {nextUpcoming.name}
+              </Text>
+                  <Text style={styles.waypointDistance}>
+                    {nextUpcoming.distance_from_start.toFixed(1)} km
+              </Text>
+            </View>
+          </View>
             </>
           )}
           
@@ -1453,6 +1403,14 @@ const NavigationScreen = () => {
             </View>
           )}
           
+          {/* Show message when no completed/upcoming points yet */}
+          {!loadingMajorPoints && majorPoints.length > 0 && (!recentCompleted || !nextUpcoming) && (
+            <View style={styles.noWaypoints}>
+              <Text style={styles.noWaypointsText}>
+                {!recentCompleted ? 'Starting route...' : 'Almost there!'}
+              </Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -1472,7 +1430,139 @@ const NavigationScreen = () => {
         >
           <Ionicons name="locate" size={24} color="#5f6368" />
         </TouchableOpacity>
+
+        {/* Waypoints List Button */}
+        <TouchableOpacity
+          style={styles.waypointsButton}
+          onPress={() => {
+            if (!showWaypointsList) {
+              loadAllWaypoints();
+            }
+            setShowWaypointsList(!showWaypointsList);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="list" size={24} color="#5f6368" />
+        </TouchableOpacity>
+
+        {/* Image Picker Button */}
+        <TouchableOpacity
+          style={styles.imagePickerButton}
+          onPress={showImageOptions}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="camera" size={24} color="#5f6368" />
+        </TouchableOpacity>
       </View>
+
+      {/* Selected Images Gallery */}
+      {selectedImages.length > 0 && (
+        <View style={styles.imageGalleryContainer}>
+          <View style={styles.imageGalleryHeader}>
+            <Text style={styles.imageGalleryTitle}>Your Photos ({selectedImages.length})</Text>
+            <TouchableOpacity
+              style={styles.addMoreButton}
+              onPress={showImageOptions}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add" size={16} color="#4285F4" />
+              <Text style={styles.addMoreText}>Add More</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.imageGrid}>
+            {selectedImages.map((imageUri, index) => (
+              <View key={index} style={styles.imageItem}>
+                <Image source={{ uri: imageUri }} style={styles.selectedImage} />
+                <TouchableOpacity
+                  style={styles.removeImageButton}
+                  onPress={() => removeImage(index)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="close-circle" size={20} color="#EA4335" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Waypoints List */}
+      {showWaypointsList && (
+        <View style={styles.waypointsListContainer}>
+          <View style={styles.waypointsListHeader}>
+            <Text style={styles.waypointsListTitle}>
+              All Waypoints ({allWaypoints.length})
+            </Text>
+            <TouchableOpacity
+              style={styles.closeWaypointsButton}
+              onPress={() => setShowWaypointsList(false)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={24} color="#5f6368" />
+            </TouchableOpacity>
+          </View>
+          
+          {loadingAllWaypoints ? (
+            <View style={styles.waypointsLoadingContainer}>
+              <ActivityIndicator size="small" color="#4285F4" />
+              <Text style={styles.waypointsLoadingText}>Loading waypoints...</Text>
+            </View>
+          ) : allWaypoints.length === 0 ? (
+            <View style={styles.waypointsEmptyContainer}>
+              <Ionicons name="location-outline" size={48} color="#9AA0A6" />
+              <Text style={styles.waypointsEmptyText}>No waypoints available</Text>
+            </View>
+          ) : (
+            <ScrollView 
+              style={styles.waypointsScrollView}
+              showsVerticalScrollIndicator={true}
+            >
+              {allWaypoints.map((waypoint, index) => (
+                <View key={waypoint.id} style={styles.waypointListItem}>
+                  <View style={styles.waypointListItemLeft}>
+                    <View style={[
+                      styles.waypointListItemIcon,
+                      waypoint.is_major && styles.waypointListItemIconMajor
+                    ]}>
+                      <Text style={styles.waypointListItemEmoji}>
+                        {getPointIcon(waypoint.category)}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.waypointListItemContent}>
+                    <View style={styles.waypointListItemHeader}>
+                      <Text style={[
+                        styles.waypointListItemName,
+                        waypoint.is_major && styles.waypointListItemNameMajor
+                      ]} numberOfLines={1}>
+                        {waypoint.name}
+                      </Text>
+                      <Text style={styles.waypointListItemTime}>
+                        {waypoint.estimated_arrival_time || '--:--'}
+                      </Text>
+                    </View>
+                    
+                    <Text style={styles.waypointListItemCategory}>
+                      {waypoint.category.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}
+                    </Text>
+                    
+                    {waypoint.address && (
+                      <Text style={styles.waypointListItemAddress} numberOfLines={1}>
+                        {waypoint.address}
+                      </Text>
+                    )}
+                    
+                    <Text style={styles.waypointListItemDistance}>
+                      {waypoint.distance_from_start.toFixed(1)} km from start
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      )}
     </View>
   );
 };
@@ -1676,7 +1766,88 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 
-  // Redesigned Progress Card - Left Side (Compact with Scroll)
+  // Image Picker Button
+  imagePickerButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+
+  // Image Gallery
+  imageGalleryContainer: {
+    position: 'absolute',
+    bottom: 200,
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+    maxHeight: 200,
+  },
+  imageGalleryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  imageGalleryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#202124',
+  },
+  addMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E8F0FE',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+  },
+  addMoreText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4285F4',
+  },
+  imageGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  imageItem: {
+    position: 'relative',
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  selectedImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+  },
+
+  // Redesigned Progress Card - Left Side (Compact)
   progressCard: {
     position: 'absolute',
     left: 12,
@@ -1684,8 +1855,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 6,
-    width: 80, // Made thinner
-    maxHeight: 250, // Made taller
+    width: 100, // Made smaller
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.12,
@@ -1696,57 +1866,55 @@ const styles = StyleSheet.create({
   waypointSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 2,
   },
   
   waypointIconContainer: {
-    width: 16,
-    height: 16,
+    width: 20,
+    height: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 6,
   },
   
   waypointTextContainer: {
     flex: 1,
+    marginLeft: 4,
   },
   
   waypointStatus: {
-    fontSize: 7,
-    fontWeight: '500',
+    fontSize: 8,
+    fontWeight: '600',
     color: '#34A853',
     textTransform: 'uppercase',
-    letterSpacing: 0.1,
+    letterSpacing: 0.2,
     marginBottom: 1,
   },
   
   waypointStatusNext: {
-    fontSize: 7,
-    fontWeight: '500',
-    color: '#9AA0A6',
+    fontSize: 8,
+    fontWeight: '600',
+    color: '#5f6368',
     textTransform: 'uppercase',
-    letterSpacing: 0.1,
+    letterSpacing: 0.2,
     marginBottom: 1,
   },
   
   waypointName: {
-    fontSize: 8,
-    fontWeight: '500',
+    fontSize: 9,
+    fontWeight: '600',
     color: '#202124',
-    lineHeight: 10,
+    lineHeight: 12,
   },
   
   progressLineContainer: {
-    width: 20,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-start',
     paddingVertical: 6,
     paddingLeft: 8,
   },
   
   progressLine: {
     width: 2,
-    height: 120, // Match the waypoints container height
+    height: 28,
     backgroundColor: '#E8EAED',
     borderRadius: 2,
     overflow: 'hidden',
@@ -1758,25 +1926,8 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#34A853', // Green for completed waypoints
+    backgroundColor: '#4285F4',
     borderRadius: 2,
-  },
-  
-  // Current Position Indicator
-  currentPositionIndicator: {
-    position: 'absolute',
-    left: -3,
-    width: 8,
-    height: 8,
-    backgroundColor: '#FF6B35',
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-    elevation: 3,
   },
   
   progressPercentage: {
@@ -1808,53 +1959,16 @@ const styles = StyleSheet.create({
     color: '#5f6368',
     fontWeight: '500',
   },
+  pointEmoji: {
+    fontSize: 16,
+  },
   waypointDistance: {
-    fontSize: 7,
+    fontSize: 8,
     color: '#9AA0A6',
     marginTop: 1,
   },
   waypointStatusApproaching: {
     color: '#FBBC04',
-  },
-
-  // Navigation Waypoint Styles (Smaller, Lighter)
-  navWaypointSection: {
-    opacity: 0.7,
-    paddingVertical: 1,
-  },
-  navWaypointIconContainer: {
-    width: 12,
-    height: 12,
-    marginRight: 4,
-  },
-  navWaypointStatus: {
-    fontSize: 6,
-    fontWeight: '400',
-    color: '#B0BEC5',
-    textTransform: 'uppercase',
-    letterSpacing: 0.1,
-    marginBottom: 1,
-  },
-  navWaypointName: {
-    fontSize: 7,
-    fontWeight: '400',
-    color: '#9AA0A6',
-    lineHeight: 8,
-  },
-  navWaypointDistance: {
-    fontSize: 6,
-    color: '#B0BEC5',
-    marginTop: 1,
-  },
-
-  // Completed Waypoint Styles (Green highlighting)
-  completedWaypointName: {
-    color: '#34A853',
-    fontWeight: '600',
-  },
-  completedWaypointDistance: {
-    color: '#34A853',
-    fontWeight: '500',
   },
   noWaypoints: {
     paddingVertical: 12,
@@ -1864,73 +1978,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: '#9AA0A6',
     fontStyle: 'italic',
-  },
-
-  // Progress and Waypoints Container
-  progressAndWaypointsContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-
-  // Scrollable Waypoints Styles
-  waypointsScrollView: {
-    flex: 1,
-    maxHeight: 170, // Increased to match taller container
-  },
-  waypointsScrollContent: {
-    paddingVertical: 2,
-  },
-
-
-  // Bike Icon Styles
-  bikeIconContainer: {
-    alignItems: 'center',
-    marginVertical: 8,
-    paddingHorizontal: 4,
-  },
-  bikeIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#FF6B35',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  bikeIconText: {
-    fontSize: 8,
-    fontWeight: '600',
-    color: '#FF6B35',
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  timeToNextStop: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 6,
-    padding: 2,
-    marginTop: 4,
-    borderLeftWidth: 2,
-    borderLeftColor: '#FF6B35',
-    minWidth: 80,
-  },
-  timeToNextStopLabel: {
-    fontSize: 6,
-    fontWeight: '500',
-    color: '#5f6368',
-    marginBottom: 1,
-    textAlign: 'center',
-  },
-  timeToNextStopTime: {
-    fontSize: 5,
-    fontWeight: '700',
-    color: '#FF6B35',
-    textAlign: 'center',
   },
 
   // Start Point Marker (Orange Flag)
@@ -2206,6 +2253,143 @@ const styles = StyleSheet.create({
     opacity: 0.2,
     borderRadius: 22,
     position: 'absolute',
+  },
+  
+  // Waypoints List Styles
+  waypointsButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  waypointsListContainer: {
+    position: 'absolute',
+    bottom: 80,
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    maxHeight: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  waypointsListHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  waypointsListTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#202124',
+  },
+  closeWaypointsButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  waypointsLoadingContainer: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  waypointsLoadingText: {
+    fontSize: 14,
+    color: '#5f6368',
+    marginTop: 8,
+  },
+  waypointsEmptyContainer: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  waypointsEmptyText: {
+    fontSize: 14,
+    color: '#9AA0A6',
+    marginTop: 8,
+  },
+  waypointsScrollView: {
+    maxHeight: 300,
+  },
+  waypointListItem: {
+    flexDirection: 'row',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  waypointListItemLeft: {
+    marginRight: 12,
+  },
+  waypointListItemIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  waypointListItemIconMajor: {
+    backgroundColor: '#E3F2FD',
+  },
+  waypointListItemEmoji: {
+    fontSize: 16,
+  },
+  waypointListItemContent: {
+    flex: 1,
+  },
+  waypointListItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 4,
+  },
+  waypointListItemName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#202124',
+    flex: 1,
+    marginRight: 8,
+  },
+  waypointListItemNameMajor: {
+    fontWeight: '700',
+    color: '#1967D2',
+  },
+  waypointListItemTime: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#5f6368',
+  },
+  waypointListItemCategory: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#5f6368',
+    marginBottom: 2,
+  },
+  waypointListItemAddress: {
+    fontSize: 12,
+    color: '#9AA0A6',
+    marginBottom: 2,
+  },
+  waypointListItemDistance: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#9AA0A6',
   },
 });
 

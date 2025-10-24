@@ -1,15 +1,15 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
+import * as Linking from 'expo-linking';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
 import { useEffect } from 'react';
-import * as Linking from 'expo-linking';
+import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
+import OAuthWebView from '../src/components/OAuthWebView';
 import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { AuthContextType } from '../src/types/auth';
-import OAuthWebView from '../src/components/OAuthWebView';
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -81,6 +81,14 @@ export default function RootLayout() {
           <Stack.Screen name="group-ride-invitation" options={{ headerShown: false }} />
           <Stack.Screen name="group-ride-details" options={{ headerShown: false }} />
           <Stack.Screen name="group-ride-invite" options={{ headerShown: false }} />
+          <Stack.Screen 
+            name="navigation" 
+            options={{ 
+              headerShown: false,
+              presentation: 'fullScreenModal',
+              animation: 'none'
+            }} 
+          />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
         </Stack>

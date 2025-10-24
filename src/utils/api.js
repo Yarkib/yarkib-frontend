@@ -1,6 +1,6 @@
 // import { Platform } from 'react-native';
-import { getRedirectUri } from '../config/oauth';
 import { getApiBaseUrl, getTimeout, isMockMode } from '../config/config.js';
+import { getRedirectUri } from '../config/oauth';
 
 export const getBaseUrl = () => {
   // Use centralized configuration
@@ -729,6 +729,115 @@ export const profileApi = {
       return await response.json();
     } catch (error) {
       console.error('[REAL] updateUserSummary error:', error);
+      throw error;
+    }
+  },
+
+  uploadAvatar: async (userId, imageUri, token) => {
+    try {
+      console.log('[AVATAR API] Uploading avatar for user:', userId);
+      console.log('[AVATAR API] Image URI:', imageUri);
+      
+      // Create FormData for file upload
+      const formData = new FormData();
+      
+      // Extract file extension from URI
+      const fileExtension = imageUri.split('.').pop() || 'jpg';
+      const fileName = `avatar_${userId}_${Date.now()}.${fileExtension}`;
+      
+      // Add the image file to FormData
+      formData.append('avatar', {
+        uri: imageUri,
+        type: `image/${fileExtension}`,
+        name: fileName,
+      });
+      
+      console.log('[AVATAR API] Uploading to:', `${BASE_URL}/users/${userId}/avatar`);
+      
+      const response = await fetch(`${BASE_URL}/users/${userId}/avatar`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Don't set Content-Type - let FormData set it with boundary
+        },
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[AVATAR API] Upload failed:', response.status, errorText);
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('[AVATAR API] Upload successful:', data);
+      return data;
+    } catch (error) {
+      console.error('[AVATAR API] uploadAvatar error:', error);
+      throw error;
+    }
+  },
+
+  uploadAvatarFromFile: async (userId, file, token) => {
+    try {
+      console.log('[AVATAR API] Uploading avatar from file for user:', userId);
+      console.log('[AVATAR API] File:', file.name, file.type, file.size);
+      
+      // Create FormData for file upload
+      const formData = new FormData();
+      
+      // Add the file directly (works on web)
+      formData.append('avatar', file, file.name);
+      
+      console.log('[AVATAR API] Uploading to:', `${BASE_URL}/users/${userId}/avatar`);
+      
+      const response = await fetch(`${BASE_URL}/users/${userId}/avatar`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Don't set Content-Type - let FormData set it with boundary
+        },
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[AVATAR API] Upload failed:', response.status, errorText);
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('[AVATAR API] Upload successful:', data);
+      return data;
+    } catch (error) {
+      console.error('[AVATAR API] uploadAvatarFromFile error:', error);
+      throw error;
+    }
+  },
+
+  deleteAvatar: async (userId, token) => {
+    try {
+      console.log('[AVATAR API] Deleting avatar for user:', userId);
+      
+      const response = await fetch(`${BASE_URL}/users/${userId}/avatar`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[AVATAR API] Delete failed:', response.status, errorText);
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('[AVATAR API] Delete successful:', data);
+      return data;
+    } catch (error) {
+      console.error('[AVATAR API] deleteAvatar error:', error);
       throw error;
     }
   },

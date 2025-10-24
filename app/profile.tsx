@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, TextInput, FlatList, Modal, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../src/context/AuthContext';
-import { theme } from '../src/theme';
-import RiderCard from '../src/components/RiderCard';
-import { getBaseUrl } from '../src/utils/api';
 import { BlurView } from 'expo-blur';
 import { router } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Alert, FlatList, Image, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import AvatarUploadWebView from '../src/components/AvatarUploadWebView';
+import RiderCard from '../src/components/RiderCard';
+import { useAuth } from '../src/context/AuthContext';
+import { theme } from '../src/theme';
+import { getBaseUrl, profileApi } from '../src/utils/api';
 
 const Profile = () => {
   const { user, session } = useAuth() as { user: any; session?: { access_token?: string } };
@@ -18,6 +19,9 @@ const Profile = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [totalDistance, setTotalDistance] = useState<number>(0);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(user?.avatar || null);
+  const [uploadingAvatar, setUploadingAvatar] = useState<boolean>(false);
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
 
   // Load real profile data
   useEffect(() => {
@@ -156,6 +160,66 @@ const Profile = () => {
     };
   }, [user?.id, session?.access_token]);
 
+  // Update avatar URL when user changes
+  useEffect(() => {
+    if (user?.avatar) {
+      setAvatarUrl(user.avatar);
+    }
+  }, [user?.avatar]);
+
+  // Function to open upload modal
+  const pickAndUploadAvatar = () => {
+    if (!user?.id || !session?.access_token) {
+      Alert.alert('Error', 'Please log in to upload a profile picture');
+      return;
+    }
+    setShowUploadModal(true);
+  };
+
+  // Handle successful upload from WebView
+  const handleUploadSuccess = (newAvatarUrl: string) => {
+    console.log('[AVATAR] Upload successful, new URL:', newAvatarUrl);
+    setAvatarUrl(newAvatarUrl);
+    setShowUploadModal(false);
+    Alert.alert('Success', 'Profile picture updated successfully!');
+  };
+
+  // Function to delete avatar
+  const deleteAvatar = async () => {
+    if (!user?.id || !session?.access_token) {
+      Alert.alert('Error', 'Please log in to delete your profile picture');
+      return;
+    }
+
+    Alert.alert(
+      'Delete Profile Picture',
+      'Are you sure you want to remove your profile picture?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setUploadingAvatar(true);
+              setError(null);
+
+              await profileApi.deleteAvatar(user.id, session.access_token);
+              
+              setAvatarUrl(null);
+              Alert.alert('Success', 'Profile picture removed successfully!');
+            } catch (error) {
+              console.error('[AVATAR] Delete error:', error);
+              Alert.alert('Error', 'Failed to delete profile picture. Please try again.');
+            } finally {
+              setUploadingAvatar(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const renderSimpleRow = ({ item }: { item: { id: string; name: string; distance_km: number } }) => (
     <View style={styles.itemRow}>
       <Text style={styles.itemTitle}>{item.name}</Text>
@@ -165,6 +229,18 @@ const Profile = () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Avatar Upload WebView Modal */}
+      {showUploadModal && user?.id && session?.access_token && (
+        <AvatarUploadWebView
+          visible={showUploadModal}
+          onClose={() => setShowUploadModal(false)}
+          onUploadSuccess={handleUploadSuccess}
+          userId={user.id}
+          token={session.access_token}
+          apiBaseUrl={getBaseUrl()}
+        />
+      )}
+      
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
@@ -174,18 +250,37 @@ const Profile = () => {
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         <BlurView intensity={60} tint={Platform.OS === 'ios' ? 'light' : 'default'} style={styles.glassHeader}>
-          <View style={styles.avatarWrap}>
-            {user?.avatar ? (
-              <Image source={{ uri: user.avatar }} style={styles.avatar} />
+          <TouchableOpacity 
+            style={styles.avatarWrap} 
+            onPress={pickAndUploadAvatar}
+          >
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Ionicons name="person" size={40} color={theme.colors.primary} />
               </View>
             )}
-          </View>
+            
+            {/* Upload indicator / camera icon */}
+            <View style={styles.avatarEditButton}>
+              <Ionicons name="camera" size={16} color="white" />
+            </View>
+            
+            {/* Delete button */}
+            {avatarUrl && (
+              <TouchableOpacity 
+                style={styles.avatarDeleteButton} 
+                onPress={deleteAvatar}
+              >
+                <Ionicons name="trash-outline" size={14} color="white" />
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
           <View style={styles.headerText}>
             <Text style={styles.name}>{user?.name || user?.email || 'Rider'}</Text>
             {user?.email ? <Text style={styles.email}>{user.email}</Text> : null}
+            <Text style={styles.avatarHint}>Tap avatar to change</Text>
           </View>
         </BlurView>
 
@@ -322,12 +417,39 @@ const styles = StyleSheet.create({
     padding: theme.spacing.md,
     overflow: 'hidden',
   },
-  avatarWrap: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', backgroundColor: theme.colors.inputBackground },
-  avatar: { width: '100%', height: '100%' },
+  avatarWrap: { width: 72, height: 72, borderRadius: 36, overflow: 'visible', backgroundColor: theme.colors.inputBackground, position: 'relative' },
+  avatar: { width: '100%', height: '100%', borderRadius: 36 },
   avatarPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  headerText: { marginLeft: theme.spacing.md },
+  avatarEditButton: { 
+    position: 'absolute', 
+    bottom: 0, 
+    right: 0, 
+    width: 28, 
+    height: 28, 
+    borderRadius: 14, 
+    backgroundColor: theme.colors.primary, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: theme.colors.background,
+  },
+  avatarDeleteButton: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#C62828',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: theme.colors.background,
+  },
+  headerText: { marginLeft: theme.spacing.md, flex: 1 },
   name: { ...theme.typography.h2 },
   email: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 4 },
+  avatarHint: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2, fontSize: 11 },
   statsRow: { flexDirection: 'row', gap: theme.spacing.md, marginBottom: theme.spacing.lg },
   statCardGlass: { flex: 1, borderRadius: 14, padding: theme.spacing.md, overflow: 'hidden' },
   statValue: { ...theme.typography.h3 },

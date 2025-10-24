@@ -1,6 +1,6 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { Waypoint } from '../types/waypoint';
 
 interface WaypointItemProps {
@@ -17,6 +17,10 @@ const WaypointItem: React.FC<WaypointItemProps> = ({ waypoint, isLast = false })
         return 'restaurant-outline';
       case 'coffee_shop':
         return 'cafe-outline';
+      case 'hotel':
+        return 'bed-outline';
+      case 'shop':
+        return 'storefront-outline';
       default:
         return 'location-outline';
     }
