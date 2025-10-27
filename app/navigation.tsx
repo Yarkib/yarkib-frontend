@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import MapboxGL from '@rnmapbox/maps';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -13,6 +15,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { getApiBaseUrl } from '../src/config/config';
+import { useAuth } from '../src/context/AuthContext';
 import { waypointsApi } from '../src/utils/api';
 
 interface RouteData {
@@ -39,6 +43,7 @@ interface MajorPoint {
 
 const NavigationScreen = () => {
   const { routeData } = useLocalSearchParams<{ routeData: string }>();
+  const { user } = useAuth() as { user: any };
   const [route, setRoute] = useState<RouteData | null>(null);
   const [mapboxToken, setMapboxToken] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(true);
@@ -73,6 +78,9 @@ const NavigationScreen = () => {
   // Navigation waypoints state
   const [navigationWaypoints, setNavigationWaypoints] = useState<any[]>([]);
   const [loadingNavigationWaypoints, setLoadingNavigationWaypoints] = useState(false);
+  
+  // User profile state
+  const [userProfile, setUserProfile] = useState<any>(null);
   
   // Scroll snap-back state
   const [scrollTimeout, setScrollTimeout] = useState<NodeJS.Timeout | null>(null);
@@ -113,7 +121,7 @@ const NavigationScreen = () => {
 
   // Mock data for demonstration
   const mockCurrentPosition = 35; // 35% through the route
-  
+
   // Get major points progress (real data from database)
   const completedPoints = majorPoints.filter(p => p.status === 'completed');
   const totalPoints = majorPoints.length;
@@ -149,6 +157,7 @@ const NavigationScreen = () => {
     
     setScrollTimeout(timeout);
   };
+
 
   const snapToCurrentPosition = () => {
     if (!scrollViewRef.current) return;
@@ -679,7 +688,7 @@ const NavigationScreen = () => {
           distance_from_start: wp.distance_from_start || 0,
           lat: wp.lat,
           lon: wp.lon,
-          is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
+          is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop', 'unknown'].includes(wp.point_type),
           status: 'upcoming' as const, // Initialize all as upcoming
         }));
         
@@ -739,6 +748,65 @@ const NavigationScreen = () => {
       }
     };
   }, [scrollTimeout]);
+
+  // Fetch user profile data for avatar
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      try {
+        console.log('[NAVIGATION] Fetching user profile for avatar...');
+        console.log('[NAVIGATION] Current user from auth:', user);
+        
+        // Get the session token for authentication
+        let session = null;
+        try {
+          const sessionData = await SecureStore.getItemAsync('supabase.auth.token');
+          session = sessionData ? JSON.parse(sessionData) : null;
+        } catch (error) {
+          console.log('[NAVIGATION] Error getting session from storage:', error);
+        }
+        const token = session?.access_token;
+        
+        if (!token) {
+          console.log('[NAVIGATION] No auth token found, using fallback');
+          if (user?.avatar) {
+            setUserProfile({ avatar_url: user.avatar });
+          }
+          return;
+        }
+        
+        // Make authenticated request to /me endpoint
+        const response = await fetch(`${getApiBaseUrl()}/me`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const profileData = await response.json();
+        console.log('[NAVIGATION] User profile data:', profileData);
+        console.log('[NAVIGATION] Avatar URL from profile:', profileData?.avatar_url);
+        console.log('[NAVIGATION] Full profile object keys:', Object.keys(profileData || {}));
+        setUserProfile(profileData);
+      } catch (error) {
+        console.error('[NAVIGATION] Error fetching user profile:', error);
+        console.log('[NAVIGATION] Using fallback - user from auth context:', user?.avatar);
+        // Try to use user.avatar as fallback
+        if (user?.avatar) {
+          setUserProfile({ avatar_url: user.avatar });
+        }
+      }
+    };
+
+    if (user?.id) {
+      fetchUserProfile();
+    }
+  }, [user?.id]);
+
 
   // Auto-dismiss start reminder when user gets close to route start
   useEffect(() => {
@@ -1082,17 +1150,55 @@ const NavigationScreen = () => {
           </MapboxGL.PointAnnotation>
         )}
 
-        {/* Mapbox Native Location Puck (Real GPS) */}
-        <MapboxGL.LocationPuck
-          puckBearingEnabled={true}
-          puckBearing="heading"
-          pulsing={{
-            isEnabled: true,
-            color: '#4285F4',
-            radius: 50,
-          }}
-        />
+           {/* Custom User Location Marker with Profile Picture - SymbolLayer Approach */}
+         {navigationState.userLocation && (() => {
+           const avatarUrl = userProfile?.avatar_url || user?.avatar;
+           console.log('[NAVIGATION] Map marker - userProfile:', userProfile);
+           console.log('[NAVIGATION] Map marker - user.avatar:', user?.avatar);
+           console.log('[NAVIGATION] Map marker - avatarUrl:', avatarUrl);
+           console.log('[NAVIGATION] Map marker - userLocation:', navigationState.userLocation);
+           return null;
+         })()}
+         {navigationState.userLocation && (
+           <MapboxGL.ShapeSource 
+             id="user-location-source" 
+             shape={{
+               type: 'FeatureCollection',
+               features: [{
+                 type: 'Feature',
+                 geometry: {
+                   type: 'Point',
+                   coordinates: [navigationState.userLocation.longitude, navigationState.userLocation.latitude]
+                 },
+                 properties: {}
+               }]
+             }}
+           >
+             <MapboxGL.SymbolLayer
+               id="user-location"
+               style={{
+                 iconImage: 'user-avatar',
+                 iconSize: 0.5, // Larger size for visibility
+                 iconAllowOverlap: true,
+                 iconIgnorePlacement: true,
+                 iconAnchor: 'center',
+                 iconPitchAlignment: 'map',
+                 iconRotationAlignment: 'map',
+                 iconTextFit: 'none',
+                 iconTextFitPadding: [0, 0, 0, 0],
+               }}
+             />
+             <MapboxGL.Images 
+               images={{ 
+                 'user-avatar': (userProfile?.avatar_url || user?.avatar) ? 
+                   { uri: `https://images.weserv.nl/?url=${encodeURIComponent(userProfile?.avatar_url || user?.avatar)}&w=64&h=64&fit=cover&mask=circle&border=3,4285F4` } : 
+                   { uri: 'https://ui-avatars.com/api/?name=U&background=4285F4&color=FFFFFF&size=64&rounded=true&bold=true' } // Fallback
+               }} 
+             />
+           </MapboxGL.ShapeSource>
+         )}
       </MapboxGL.MapView>
+
 
       {/* Back Button - Top Left */}
       <SafeAreaView style={styles.backButtonContainer}>
@@ -1400,15 +1506,15 @@ const NavigationScreen = () => {
                                   : "#B0BEC5"  // Light gray for navigation waypoints
                               } 
                             />
-                          </View>
-                          <View style={styles.waypointTextContainer}>
+            </View>
+            <View style={styles.waypointTextContainer}>
                             <Text style={[
                               point.isMajor ? styles.waypointStatusNext : styles.navWaypointStatus,
                               isCompleted && styles.waypointStatus
                             ]}>
                               {isCompleted ? 'Passed' : 
                                point.isMajor ? 'Next' : 'Nav'}
-                            </Text>
+              </Text>
                             <Text style={[
                               point.isMajor ? styles.waypointName : styles.navWaypointName,
                               isCompleted && styles.completedWaypointName
@@ -1420,29 +1526,43 @@ const NavigationScreen = () => {
                               isCompleted && styles.completedWaypointDistance
                             ]}>
                               {point.distance_from_start.toFixed(1)} km
-                            </Text>
-                          </View>
-                        </View>
-                        
-                        {/* Bike Icon with Time to Next Stop */}
+                  </Text>
+            </View>
+          </View>
+
+                        {/* User Profile Picture with Time to Next Stop */}
                         {shouldShowBike && (
                           <View style={styles.bikeIconContainer}>
                             <View style={styles.bikeIcon}>
-                              <Ionicons name="bicycle" size={16} color="#FF6B35" />
-                            </View>
+                              {userProfile?.avatar_url || user?.avatar ? (
+                                <Image 
+                                  source={{ uri: userProfile?.avatar_url || user?.avatar }} 
+                                  style={styles.profilePicture}
+                                  onError={(error) => {
+                                    console.log('[NAVIGATION] Image load error:', error);
+                                    console.log('[NAVIGATION] Failed to load avatar URL:', userProfile?.avatar_url || user?.avatar);
+                                  }}
+                                  onLoad={() => {
+                                    console.log('[NAVIGATION] Successfully loaded avatar:', userProfile?.avatar_url || user?.avatar);
+                                  }}
+                                />
+                              ) : (
+                                <Ionicons name="person" size={16} color="#FF6B35" />
+                              )}
+            </View>
                             <Text style={styles.bikeIconText}>You are here</Text>
                             <View style={styles.timeToNextStop}>
                               <Text style={styles.timeToNextStopLabel}>Next: {mockNextStopName}</Text>
                               <Text style={styles.timeToNextStopTime}>{mockTimeToNextStop} min</Text>
-                            </View>
-                          </View>
+          </View>
+            </View>
                         )}
-                      </View>
+            </View>
                     );
                   });
                 })()}
               </ScrollView>
-              </View>
+          </View>
             </>
           )}
           
@@ -1903,6 +2023,11 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  profilePicture: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
   bikeIconText: {
     fontSize: 8,
     fontWeight: '600',
@@ -2177,36 +2302,64 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   
-  // User Location (Google Blue Dot)
+   // Custom User Location Marker Styles
   userLocationMarker: {
-    width: 44,
-    height: 44,
+     alignItems: 'center',
     justifyContent: 'center',
+   },
+   userLocationPuck: {
+     width: 40,
+     height: 40,
+     borderRadius: 20,
+     backgroundColor: '#FFFFFF',
+     borderWidth: 3,
+     borderColor: '#4285F4',
     alignItems: 'center',
-  },
-  userLocationDot: {
-    width: 16,
-    height: 16,
+     justifyContent: 'center',
+     shadowColor: '#000',
+     shadowOffset: { width: 0, height: 2 },
+     shadowOpacity: 0.25,
+     shadowRadius: 4,
+     elevation: 5,
+   },
+   userLocationAvatar: {
+     width: 34,
+     height: 34,
+     borderRadius: 17,
+     backgroundColor: '#f0f0f0', // Debug background to see if image container is there
+   },
+   userLocationPulse: {
+     position: 'absolute',
+     width: 60,
+     height: 60,
+     borderRadius: 30,
     backgroundColor: '#4285F4',
-    borderRadius: 8,
-    borderWidth: 4,
+     opacity: 0.3,
+     // Animation will be handled by Mapbox's built-in pulsing
+   },
+   
+   // Clean User Location Styles
+   cleanUserLocation: {
+     width: 24,
+     height: 24,
+     borderRadius: 12,
+     backgroundColor: '#4285F4',
+     borderWidth: 3,
     borderColor: '#FFFFFF',
-    position: 'absolute',
-    zIndex: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
-  },
-  userLocationPulse: {
-    width: 44,
-    height: 44,
-    backgroundColor: '#4285F4',
-    opacity: 0.2,
-    borderRadius: 22,
-    position: 'absolute',
-  },
+     justifyContent: 'center',
+     alignItems: 'center',
+   },
+   cleanUserLocationInner: {
+     width: 8,
+     height: 8,
+     borderRadius: 4,
+     backgroundColor: '#FFFFFF',
+   },
 });
 
 export default NavigationScreen;

@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { launchImageLibraryAsync, MediaTypeOptions, requestMediaLibraryPermissionsAsync } from 'expo-image-picker';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Alert, FlatList, Image, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import AvatarUploadWebView from '../src/components/AvatarUploadWebView';
 import RiderCard from '../src/components/RiderCard';
 import { useAuth } from '../src/context/AuthContext';
 import { theme } from '../src/theme';
@@ -20,8 +20,12 @@ const Profile = () => {
   const [error, setError] = useState<string | null>(null);
   const [totalDistance, setTotalDistance] = useState<number>(0);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(user?.avatar || null);
+  
+  // Debug logging for avatar URL changes
+  useEffect(() => {
+    console.log('[PROFILE] Avatar URL state changed:', avatarUrl);
+  }, [avatarUrl]);
   const [uploadingAvatar, setUploadingAvatar] = useState<boolean>(false);
-  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
 
   // Load real profile data
   useEffect(() => {
@@ -102,9 +106,13 @@ const Profile = () => {
         let profileData = null;
         if (profileResponse.ok) {
           profileData = await profileResponse.json();
-          console.log('[PROFILE] Received profile data');
+          console.log('[PROFILE] Received profile data:', JSON.stringify(profileData, null, 2));
+          console.log('[PROFILE] Avatar URL from backend:', profileData?.avatar_url);
+          console.log('[PROFILE] Profile data keys:', Object.keys(profileData || {}));
         } else {
           console.log('[PROFILE] Failed to fetch profile data:', profileResponse.status);
+          const errorText = await profileResponse.text();
+          console.log('[PROFILE] Error response:', errorText);
         }
 
         // Process stats data
@@ -120,6 +128,13 @@ const Profile = () => {
         if (profileData?.summary) setSummary(profileData.summary);
         if (Array.isArray(profileData?.favourite_categories)) {
           setFavouriteCategories(profileData.favourite_categories);
+        }
+        if (profileData?.avatar_url) {
+          setAvatarUrl(profileData.avatar_url);
+          console.log('[PROFILE] Set avatar URL from database:', profileData.avatar_url);
+        } else {
+          console.log('[PROFILE] No avatar_url found in profile data');
+          console.log('[PROFILE] Available fields:', Object.keys(profileData || {}));
         }
 
         // Set total distance from stats or calculate from completed rides
@@ -162,26 +177,64 @@ const Profile = () => {
 
   // Update avatar URL when user changes
   useEffect(() => {
+    console.log('[PROFILE] User avatar from auth context:', user?.avatar);
     if (user?.avatar) {
       setAvatarUrl(user.avatar);
+      console.log('[PROFILE] Set avatar URL from auth context:', user.avatar);
     }
   }, [user?.avatar]);
 
-  // Function to open upload modal
-  const pickAndUploadAvatar = () => {
+  // Function to pick and upload avatar using native image picker
+  const pickAndUploadAvatar = async () => {
     if (!user?.id || !session?.access_token) {
       Alert.alert('Error', 'Please log in to upload a profile picture');
       return;
     }
-    setShowUploadModal(true);
+
+    try {
+      // Request permissions
+      const permissionResult = await requestMediaLibraryPermissionsAsync();
+      
+      if (permissionResult.granted === false) {
+        Alert.alert('Permission Required', 'Permission to access camera roll is required!');
+        return;
+      }
+
+      // Launch image picker
+      const result = await launchImageLibraryAsync({
+        mediaTypes: MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        base64: false,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        await uploadAvatar(asset.uri);
+      }
+    } catch (error) {
+      console.error('[AVATAR] Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    }
   };
 
-  // Handle successful upload from WebView
-  const handleUploadSuccess = (newAvatarUrl: string) => {
-    console.log('[AVATAR] Upload successful, new URL:', newAvatarUrl);
-    setAvatarUrl(newAvatarUrl);
-    setShowUploadModal(false);
-    Alert.alert('Success', 'Profile picture updated successfully!');
+  // Upload avatar to server
+  const uploadAvatar = async (imageUri: string) => {
+    try {
+      setUploadingAvatar(true);
+      setError(null);
+
+      // Use the existing profileApi.uploadAvatar function
+      const data = await profileApi.uploadAvatar(user.id, imageUri, session?.access_token);
+      setAvatarUrl(data.avatar_url);
+      Alert.alert('Success', 'Profile picture updated successfully!');
+    } catch (error) {
+      console.error('[AVATAR] Upload error:', error);
+      Alert.alert('Error', 'Failed to upload profile picture. Please try again.');
+    } finally {
+      setUploadingAvatar(false);
+    }
   };
 
   // Function to delete avatar
@@ -229,18 +282,6 @@ const Profile = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Avatar Upload WebView Modal */}
-      {showUploadModal && user?.id && session?.access_token && (
-        <AvatarUploadWebView
-          visible={showUploadModal}
-          onClose={() => setShowUploadModal(false)}
-          onUploadSuccess={handleUploadSuccess}
-          userId={user.id}
-          token={session.access_token}
-          apiBaseUrl={getBaseUrl()}
-        />
-      )}
-      
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={theme.colors.text} />
@@ -252,7 +293,8 @@ const Profile = () => {
         <BlurView intensity={60} tint={Platform.OS === 'ios' ? 'light' : 'default'} style={styles.glassHeader}>
           <TouchableOpacity 
             style={styles.avatarWrap} 
-            onPress={pickAndUploadAvatar}
+            onPress={uploadingAvatar ? undefined : pickAndUploadAvatar}
+            disabled={uploadingAvatar}
           >
             {avatarUrl ? (
               <Image source={{ uri: avatarUrl }} style={styles.avatar} />
@@ -263,8 +305,12 @@ const Profile = () => {
             )}
             
             {/* Upload indicator / camera icon */}
-            <View style={styles.avatarEditButton}>
-              <Ionicons name="camera" size={16} color="white" />
+            <View style={[styles.avatarEditButton, uploadingAvatar && styles.avatarEditButtonDisabled]}>
+              {uploadingAvatar ? (
+                <Ionicons name="hourglass" size={16} color="white" />
+              ) : (
+                <Ionicons name="camera" size={16} color="white" />
+              )}
             </View>
             
             {/* Delete button */}
@@ -432,6 +478,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: theme.colors.background,
+  },
+  avatarEditButtonDisabled: {
+    backgroundColor: theme.colors.textSecondary,
+    opacity: 0.7,
   },
   avatarDeleteButton: {
     position: 'absolute',

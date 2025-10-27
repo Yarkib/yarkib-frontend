@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yarkib",
     "slug": "yarkib",
-    "owner": "shabbar26",
+    "owner": "shabbar.raza",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -39,6 +39,11 @@
             "DEFAULT"
           ]
         }
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "plugins": [
@@ -47,11 +52,25 @@
         {
           "RNMapboxMapsDownloadToken": "sk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21na3o3MnI2MDJ0MDJscjU1MGRpaG40bSJ9.JBJ-H6HPUBGk6V0PDphYIg"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you share them with your friends."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Yarkib to access your location.",
+          "locationAlwaysPermission": "Allow Yarkib to always access your location.",
+          "locationWhenInUsePermission": "Allow Yarkib to access your location while you are using the app."
+        }
       ]
     ],
     "extra": {
       "eas": {
-        "projectId": "ce61d81b-9561-45ac-909f-72477d8651e2"
+        "projectId": "c1a43a2b-19d5-4495-85c2-29748f23c2e6"
       }
     }
   }
