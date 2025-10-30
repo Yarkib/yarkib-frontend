@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import MapboxGL from '@rnmapbox/maps';
+import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
+import debounce from 'lodash.debounce';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,6 +20,93 @@ import {
 import { getApiBaseUrl } from '../src/config/config';
 import { useAuth } from '../src/context/AuthContext';
 import { waypointsApi } from '../src/utils/api';
+import { createDynamicRouteCoordinates, findClosestPointOnRoute } from './utils/navigationRouteHelpers';
+
+// Helper function for array comparison
+function arraysEqual(a: Array<[number,number]> | null, b: Array<[number,number]> | null): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i][0] !== b[i][0] || a[i][1] !== b[i][1]) return false;
+  }
+  return true;
+}
+
+// Coordinate validation helper
+function ensureLngLat(coord: [number,number]): [number,number] {
+  const [a, b] = coord;
+  // If first value looks like latitude (> -90 && < 90) and second also plausible,
+  // assume we need to swap to get [lng,lat] format
+  if (Math.abs(a) <= 90 && Math.abs(b) <= 180 && Math.abs(a) < Math.abs(b)) {
+    return [coord[1], coord[0]] as [number,number];
+  }
+  return coord;
+}
+
+// Compute bearing between two points
+function computeBearing(from: [number,number], to: [number,number]): number {
+  const toRad = (d: number) => d * Math.PI / 180;
+  const toDeg = (r: number) => r * 180 / Math.PI;
+  const [lng1, lat1] = from;
+  const [lng2, lat2] = to;
+  const φ1 = toRad(lat1), φ2 = toRad(lat2);
+  const λ1 = toRad(lng1), λ2 = toRad(lng2);
+  const y = Math.sin(λ2-λ1)*Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(λ2-λ1);
+  const θ = Math.atan2(y,x);
+  return (toDeg(θ)+360) % 360; // 0..359
+}
+
+// Compute smoothed bearing using 3-point EMA
+function smoothedBearing(samples: Array<[number,number]>): number | null {
+  if (samples.length < 2) return null;
+  
+  // Compute bearings between consecutive pairs
+  const bearings = [];
+  for (let i = 1; i < samples.length; i++) {
+    bearings.push(computeBearing(samples[i-1], samples[i]));
+  }
+  
+  // Simple EMA with heavier weight to newest
+  let alpha = 0.6;
+  let ema = bearings[0];
+  for (let i = 1; i < bearings.length; i++) {
+    ema = (alpha * bearings[i]) + ((1-alpha) * ema);
+  }
+  return (ema + 360) % 360;
+}
+
+// Enhanced Map Matching helper with confidence
+async function mapMatchTrace(pointsArray: Array<[number,number]>, token: string) {
+  if (!pointsArray || pointsArray.length < 2) return null;
+  try {
+    const coords = pointsArray.map(p => `${p[0]},${p[1]}`).join(';');
+    const url = `https://api.mapbox.com/matching/v5/mapbox/driving/${coords}?geometries=geojson&access_token=${token}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j && j.matchings && j.matchings.length) {
+      const best = j.matchings[0];
+      const lastTrace = j.tracepoints ? j.tracepoints[j.tracepoints.length - 1] : null;
+      const snapped = lastTrace && lastTrace.location ? lastTrace.location : best.geometry.coordinates[0];
+      
+      // Calculate confidence based on matching quality
+      const confidence = lastTrace?.matching_index !== undefined ? 
+        (lastTrace.matching_index >= 0 ? 0.9 : 0.3) : 0.5;
+      
+      return { 
+        matchedCoords: snapped, 
+        matchGeometry: best.geometry, 
+        matchings: j.matchings,
+        confidence: confidence,
+        lastTracepoint: lastTrace
+      };
+    }
+  } catch (error) {
+    console.warn('[NAV] Map matching failed:', error);
+  }
+  return null;
+}
 
 interface RouteData {
   id: string;
@@ -52,6 +141,10 @@ const NavigationScreen = () => {
   // Navigation phase management
   const [navigationPhase, setNavigationPhase] = useState<'TO_START' | 'ON_ROUTE'>('TO_START');
   const [navigationToStartRoute, setNavigationToStartRoute] = useState<[number, number][] | null>(null);
+  const [dynamicRouteCoordinates, setDynamicRouteCoordinates] = useState<[number, number][] | null>(null);
+  const dynamicRouteCoordinatesRef = useRef<[number, number][] | null>(null);
+  const navigationToStartRouteRef = useRef<[number, number][] | null>(null);
+  const recentPointsRef = useRef<Array<[number, number]>>([]);
   const [navigationSteps, setNavigationSteps] = useState<any[]>([]);
   const [distanceToStart, setDistanceToStart] = useState<number>(0);
   const [showSkipButton, setShowSkipButton] = useState(false);
@@ -62,14 +155,128 @@ const NavigationScreen = () => {
   const [showStartReminder, setShowStartReminder] = useState(false);
   const [hasAttemptedNavToStart, setHasAttemptedNavToStart] = useState(false);
   const [followUserLocation, setFollowUserLocation] = useState(true);
+  const [lastRecalculationTime, setLastRecalculationTime] = useState<number>(0);
+  const [originalRouteCoordinates, setOriginalRouteCoordinates] = useState<[number, number][] | null>(null);
   
   // Navigation thresholds
   const NAVIGATION_THRESHOLDS = {
     AT_START: 0.15,        // 150 meters - auto-skip
     NEAR_START: 0.5,       // 500 meters - show skip button
     ARRIVED_AT_START: 0.05, // 50 meters - auto-transition
-    MAX_NAV_DISTANCE: 500  // 500 km - max distance for navigation to start
+    MAX_NAV_DISTANCE: 500, // 500 km - max distance for navigation to start
+    DEVIATION_THRESHOLD: 0.2, // 200 meters - recalculate route if deviated
+    RECALCULATION_COOLDOWN: 30000, // 30 seconds between recalculations
   };
+
+  // Ultra-precise threshold function for maximum accuracy
+  const getAdaptiveThresholds = (speedMps: number) => {
+    const speedKmh = speedMps * 3.6;
+    const isHighway = speedKmh > 50;
+    
+    return {
+      // Ultra-tight thresholds for service road vs main road accuracy
+      ON_ROUTE: 8,                     // Very tight 8m - distinguish service/main roads
+      REROUTE: 25,                     // Very aggressive 25m rerouting
+      DEBOUNCE: isHighway ? 800 : 500, // Much faster response
+      COOLDOWN: isHighway ? 3000 : 2000, // Much shorter cooldown
+      BEARING_TOLERANCE: 30,           // Very tight 30° for precise road following
+      MAP_MATCH_POINTS: 8,             // More points for better precision
+      MAP_MATCH_FREQ_MS: isHighway ? 2000 : 1000 // Much more frequent map matching
+    };
+  };
+
+  // Legacy constants (will be replaced by adaptive ones)
+  const REROUTE_DEBOUNCE_MS = 1500;
+  const REROUTE_COOLDOWN_MS = 10000;
+  const DEVIATION_THRESHOLD_METERS = 25;
+
+  const lastRecalcRef = useRef<number>(0);
+  const lastMapMatchRef = useRef<number>(0);
+  const routeETARef = useRef<number | null>(null);
+
+  // Enhanced debounced reroute function with adaptive thresholds
+  const debouncedFetchNavigationToStart = useRef(
+    debounce(async (currentLngLat: [number, number], originalRouteEnd: [number, number], currentSpeed: number = 0) => {
+      const now = Date.now();
+      const thresholds = getAdaptiveThresholds(currentSpeed);
+      
+      if (now - lastRecalcRef.current < thresholds.COOLDOWN) return;
+      lastRecalcRef.current = now;
+      
+      try {
+        console.log('[NAV] Debounced reroute triggered:', { currentLngLat, originalRouteEnd, speed: currentSpeed });
+        
+        // Enhanced reroute logic with controlled map matching
+        const lastPoints = recentPointsRef.current;
+        let originForRouting = ensureLngLat(currentLngLat);
+        let bearing: number | null = null;
+        let mapMatchConfidence = 0;
+        const token = mapboxToken || 'pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ';
+
+        // Controlled map matching based on frequency and point count
+        const shouldMapMatch = (now - lastMapMatchRef.current > thresholds.MAP_MATCH_FREQ_MS) && 
+                              (lastPoints.length >= thresholds.MAP_MATCH_POINTS);
+        
+        if (shouldMapMatch) {
+          const mm = await mapMatchTrace(lastPoints, token);
+          if (mm && mm.matchedCoords && mm.confidence > 0.3) { // Lower confidence threshold for more aggressive snapping
+            originForRouting = mm.matchedCoords;
+            mapMatchConfidence = mm.confidence;
+            lastMapMatchRef.current = now;
+            console.log('[NAV] Using map matched origin:', { origin: originForRouting, confidence: mapMatchConfidence });
+          }
+        }
+        
+        // Use smoothed bearing for better directional routing
+        bearing = smoothedBearing(lastPoints);
+        if (bearing === null && lastPoints.length >= 2) {
+          // Fallback to simple bearing if smoothed fails
+          bearing = computeBearing(lastPoints[lastPoints.length-2], lastPoints[lastPoints.length-1]);
+        }
+        
+        console.log('[NAV] Reroute params:', { 
+          origin: originForRouting, 
+          bearing, 
+          mapMatchConfidence,
+          bearingTolerance: thresholds.BEARING_TOLERANCE
+        });
+
+        // Request reroute with enhanced parameters
+        const routeResp = await fetchReroute(originForRouting, originalRouteEnd, bearing, thresholds.BEARING_TOLERANCE);
+        
+        if (routeResp?.routes?.length) {
+          const newRoute = routeResp.routes[0].geometry.coordinates;
+          const newETA = routeResp.routes[0].duration; // in seconds
+          const currentETA = routeETARef.current;
+          
+          console.log('[NAV] DIRECTIONS result first coords:', newRoute.slice(0, 3));
+          console.log('[NAV] Route comparison:', { newETA, currentETA, improvement: currentETA ? currentETA - newETA : 'N/A' });
+          
+          // Aggressive route switching for maximum accuracy
+          const shouldSwitchRoute = !currentETA || // No current route
+                                   (newETA < currentETA - 5) || // >5s improvement (more aggressive)
+                                   (mapMatchConfidence > 0.4); // Lower confidence threshold for more switching
+          
+          if (shouldSwitchRoute) {
+            setNavigationToStartRoute(newRoute);
+            navigationToStartRouteRef.current = newRoute;
+            routeETARef.current = newETA;
+            setNavigationSteps(routeResp.routes[0].legs[0]?.steps || []);
+            // Clear dynamic route since we have a new base route
+            setDynamicRouteCoordinates(null);
+            dynamicRouteCoordinatesRef.current = null;
+            console.log('[NAV] Route switched - benefit confirmed');
+          } else {
+            console.log('[NAV] Route not switched - insufficient benefit');
+          }
+        } else {
+          console.warn('[NAV] No routes returned from reroute API');
+        }
+      } catch (err) {
+        console.warn('[NAV] Reroute API failed', err);
+      }
+    }, REROUTE_DEBOUNCE_MS)
+  ).current;
   
   // Major points state
   const [majorPoints, setMajorPoints] = useState<MajorPoint[]>([]);
@@ -114,7 +321,10 @@ const NavigationScreen = () => {
     nextTurnInstruction: 'Loading navigation...',
     nextTurnType: 'straight',
     currentProgress: 0,
-    userLocation: null,
+    userLocation: {
+      latitude: 24.93431525,
+      longitude: 67.06849039,
+    },
     heading: 0,
     currentStepIndex: 0,
   });
@@ -220,11 +430,20 @@ const NavigationScreen = () => {
       setMapboxToken(token);
       MapboxGL.setAccessToken(token);
       
-      // Request location permissions
+      // Request location permissions using Expo Location
       try {
-        const granted = await MapboxGL.requestAndroidLocationPermissions();
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        const granted = status === 'granted';
         setLocationPermission(granted);
-        console.log('[NAVIGATION] Location permission:', granted);
+        console.log('[NAVIGATION] Location permission:', granted, 'Status:', status);
+        
+        if (!granted) {
+          Alert.alert(
+            'Location Permission Required',
+            'Please enable location permissions to use navigation features.',
+            [{ text: 'OK' }]
+          );
+        }
       } catch (error) {
         console.error('[NAVIGATION] Error requesting location permission:', error);
       }
@@ -233,48 +452,58 @@ const NavigationScreen = () => {
     initializeMapbox();
   }, []);
 
-  // Manual location tracking using Mapbox Location Manager
+  // Location tracking using Expo Location
   useEffect(() => {
     if (!locationPermission) return;
     
-    const startLocationTracking = () => {
-      console.log('[NAV] Starting location tracking...');
+    let locationSubscription: Location.LocationSubscription | null = null;
+    
+    const startLocationTracking = async () => {
+      console.log('[NAV] Starting Expo Location tracking...');
       
-      // Get initial location immediately
-      MapboxGL.locationManager.getLastKnownLocation()
-        .then(location => {
-          if (location && location.coords) {
-            console.log('[NAV] Initial location acquired:', location.coords);
-            handleLocationUpdate(location);
-          }
-        })
-        .catch(error => console.log('[NAV] Error getting initial location:', error));
-      
-      // Use a polling interval to get location updates
-      const locationInterval = setInterval(async () => {
-        try {
-          const location = await MapboxGL.locationManager.getLastKnownLocation();
-          
-          if (location && location.coords) {
-            handleLocationUpdate(location);
-          }
-        } catch (error) {
-          console.log('[NAV] Error getting location:', error);
+      try {
+        // Get initial location immediately
+        const initialLocation = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        
+        if (initialLocation) {
+          console.log('[NAV] Initial location acquired:', initialLocation.coords);
+          handleLocationUpdate(initialLocation);
         }
-      }, 2000); // Update every 2 seconds
-
-      return () => {
-        console.log('[NAV] Stopping location tracking');
-        clearInterval(locationInterval);
-      };
+        
+        // Start watching position for real-time updates
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 2000, // Update every 2 seconds
+            distanceInterval: 5, // Update every 5 meters
+          },
+          (location) => {
+            console.log('[NAV] Location update received:', location.coords);
+            handleLocationUpdate(location);
+          }
+        );
+        
+        console.log('[NAV] Location subscription started');
+        
+        } catch (error) {
+        console.error('[NAV] Error starting location tracking:', error);
+        }
     };
     
-    const cleanup = startLocationTracking();
-    return cleanup;
+    startLocationTracking();
+
+      return () => {
+      console.log('[NAV] Stopping Expo Location tracking');
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
   }, [locationPermission]);
 
-  // Handle real-time location updates from Mapbox
-  const handleLocationUpdate = (location: any) => {
+  // Handle real-time location updates from Expo Location
+  const handleLocationUpdate = async (location: Location.LocationObject) => {
     if (!location || !location.coords) return;
     
     const { coords } = location;
@@ -283,10 +512,19 @@ const NavigationScreen = () => {
     // Convert speed from m/s to km/h
     const speedKmh = (coords.speed || 0) * 3.6;
     
-    // Update navigation state with real GPS data
-    setNavigationState(prev => {
+    // Create user location object
       const userLoc = { latitude: coords.latitude, longitude: coords.longitude };
       
+    // Track recent GPS points for bearing calculation and map matching
+    const userPt: [number, number] = [coords.longitude, coords.latitude];
+    recentPointsRef.current.push(userPt);
+    // Keep only last 8 points for map matching
+    if (recentPointsRef.current.length > 8) {
+      recentPointsRef.current.shift();
+    }
+      
+    // Update navigation state with real GPS data
+    setNavigationState(prev => {
       // Calculate progress if we have route coordinates
       let progress = prev.currentProgress;
       if (route && route.coordinates.length > 0) {
@@ -311,6 +549,60 @@ const NavigationScreen = () => {
         currentProgress: progress,
       };
     });
+    
+    // Check for route deviation and update dynamic route during TO_START phase
+    if (navigationPhase === 'TO_START') {
+      if (navigationToStartRouteRef.current && navigationToStartRouteRef.current.length > 0) {
+        // ensure coords are [lng,lat]
+        const userPt: [number,number] = [userLoc.longitude, userLoc.latitude];
+        const closest = findClosestPointOnRoute(navigationToStartRouteRef.current, userPt);
+        console.log('[NAV] Projection check', { 
+          segIdx: closest.segmentIndex, 
+          t: closest.t.toFixed(3), 
+          distMeters: closest.distanceMeters.toFixed(1) 
+        });
+
+        // Use adaptive thresholds based on current speed
+        const currentSpeed = coords.speed || 0;
+        const thresholds = getAdaptiveThresholds(currentSpeed);
+
+        if (closest.distanceMeters <= thresholds.ON_ROUTE) {
+          const newDyn = createDynamicRouteCoordinates(navigationToStartRouteRef.current, userPt);
+          // only update if different to avoid unnecessary rerenders
+          if (!arraysEqual(dynamicRouteCoordinatesRef.current, newDyn)) {
+            setDynamicRouteCoordinates(newDyn);
+            dynamicRouteCoordinatesRef.current = newDyn;
+            console.log('[NAV] Updated dynamic route (shortened)', { newLength: newDyn.length, speed: currentSpeed });
+          }
+        } else if (closest.distanceMeters > thresholds.REROUTE) {
+          // Create a better bridging segment using road geometry
+          console.log('[NAV] User far off-route, creating bridging segment', { 
+            dist: closest.distanceMeters.toFixed(1), 
+            speed: currentSpeed,
+            thresholds: thresholds
+          });
+          try {
+            await createBridgingSegmentAndDraw(userPt, closest.segmentIndex);
+          } catch (err) {
+            console.warn('[NAV] Bridge creation failed:', err);
+          }
+          debouncedFetchNavigationToStart(userPt, route?.coordinates[0] || [0, 0], currentSpeed);
+        } else {
+          // moderate deviation - show dynamic route but don't reroute
+          const newDyn = createDynamicRouteCoordinates(navigationToStartRouteRef.current, userPt);
+          if (!arraysEqual(dynamicRouteCoordinatesRef.current, newDyn)) {
+            setDynamicRouteCoordinates(newDyn);
+            dynamicRouteCoordinatesRef.current = newDyn;
+            console.log('[NAV] Moderate deviation - visual update', { 
+              newLength: newDyn.length, 
+              dist: closest.distanceMeters.toFixed(1) 
+            });
+          }
+        }
+      } else {
+        console.log('[NAV] No route data available for projection check');
+      }
+    }
   };
   
   // Simple distance calculation helper
@@ -326,9 +618,80 @@ const NavigationScreen = () => {
     return R * c;
   };
 
-  // Fetch navigation route from current location to start point using Mapbox Directions API
+
+  // Create bridging segment using road geometry instead of straight lines
+  const createBridgingSegmentAndDraw = async (userPt: [number, number], segmentIndex: number) => {
+    try {
+      if (!navigationToStartRouteRef.current) return;
+      
+      // Get the next route point to bridge to
+      const nextIndex = Math.min(segmentIndex + 1, navigationToStartRouteRef.current.length - 1);
+      const nextRoutePt = navigationToStartRouteRef.current[nextIndex];
+      
+      // Compute bearing if we have recent points
+      let bearing: number | null = null;
+      if (recentPointsRef.current.length >= 2) {
+        bearing = computeBearing(recentPointsRef.current[recentPointsRef.current.length-2], userPt);
+      }
+      
+      // Request a short route from user to next route point with ultra-tight tolerance for maximum accuracy
+      const bridgeResp = await fetchReroute(userPt, nextRoutePt, bearing, 30); // Ultra-tight 30° for precise road-following
+      
+      if (bridgeResp?.routes?.length) {
+        const bridgeCoords = bridgeResp.routes[0].geometry.coordinates;
+        // Combine bridge + remaining original route
+        const remainingRoute = navigationToStartRouteRef.current.slice(nextIndex + 1);
+        const fullBridgedRoute = [...bridgeCoords, ...remainingRoute];
+        setDynamicRouteCoordinates(fullBridgedRoute);
+        dynamicRouteCoordinatesRef.current = fullBridgedRoute;
+        console.log('[NAV] Created road-following bridge segment', { bridgeLength: bridgeCoords.length });
+      } else {
+        // Fallback to straight line with visual indicator it's temporary
+        const bridgingLine: [number,number][] = [[userPt[0], userPt[1]], [nextRoutePt[0], nextRoutePt[1]]];
+        setDynamicRouteCoordinates(bridgingLine);
+        dynamicRouteCoordinatesRef.current = bridgingLine;
+        console.log('[NAV] Using temporary straight bridge (API failed)');
+      }
+    } catch (error) {
+      console.warn('[NAV] Bridge segment creation failed:', error);
+      // Fallback to straight line
+      if (navigationToStartRouteRef.current) {
+        const nextIndex = Math.min(segmentIndex + 1, navigationToStartRouteRef.current.length - 1);
+        const nextRoutePt = navigationToStartRouteRef.current[nextIndex];
+        const bridgingLine: [number,number][] = [[userPt[0], userPt[1]], [nextRoutePt[0], nextRoutePt[1]]];
+        setDynamicRouteCoordinates(bridgingLine);
+        dynamicRouteCoordinatesRef.current = bridgingLine;
+      }
+    }
+  };
+
+  // Enhanced reroute function with bearing and tolerance
+  const fetchReroute = async (origin: [number, number], destination: [number, number], bearing: number | null = null, bearingTolerance: number = 45) => {
+    const token = mapboxToken || 'pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ';
+    const coords = `${origin[0]},${origin[1]};${destination[0]},${destination[1]}`;
+    const base = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}`;
+    const params = new URLSearchParams({
+      geometries: 'geojson',
+      overview: 'full',
+      steps: 'true',
+      alternatives: 'false',
+      continue_straight: 'false',
+      access_token: token,
+    });
+    if (bearing != null) {
+      // bearings: origin bearing with adaptive tolerance + placeholder for destination
+      params.append('bearings', `${Math.round(bearing)},${bearingTolerance};`);
+    }
+    const url = `${base}?${params.toString()}`;
+    console.log('[NAV] REROUTE REQUEST', { origin, bearing, bearingTolerance, destination, url });
+    const res = await fetch(url);
+    return res.json();
+  };
+
+  // Enhanced navigation route fetch with bearing constraints to prevent building routing
   const fetchNavigationToStart = async (userLocation: [number, number], startPoint: [number, number]) => {
-    if (!mapboxToken) {
+    const token = mapboxToken || 'pk.eyJ1Ijoic3phaWQwMDEiLCJhIjoiY21meTlqdThrMGJweTJycTA2MG1meTBndCJ9.ovCqcSmbW2orUFkmPq_mAQ';
+    if (!token) {
       console.log('[NAV] No Mapbox token available yet');
       return;
     }
@@ -338,9 +701,51 @@ const NavigationScreen = () => {
       setNavigationToStartError(null);
       console.log('[NAV] Fetching route to start point...', { userLocation, startPoint });
       
-      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${userLocation[0]},${userLocation[1]};${startPoint[0]},${startPoint[1]}?geometries=geojson&steps=true&banner_instructions=true&voice_instructions=true&alternatives=false&continue_straight=true&access_token=${mapboxToken}`;
+      // Enhanced origin with map matching and bearing if available
+      let enhancedOrigin = ensureLngLat(userLocation);
+      let bearing: number | null = null;
       
-      console.log('[NAV] Mapbox API URL:', url);
+      // Try to get smoothed bearing from recent points
+      if (recentPointsRef.current.length >= 2) {
+        bearing = smoothedBearing(recentPointsRef.current);
+        console.log('[NAV] Using smoothed bearing for initial route:', bearing);
+      }
+      
+      // Try map matching for better origin if we have enough points (aggressive snapping)
+      if (recentPointsRef.current.length >= 4) {
+        const mm = await mapMatchTrace(recentPointsRef.current, token);
+        if (mm && mm.matchedCoords && mm.confidence > 0.3) { // Lower threshold for more aggressive road snapping
+          enhancedOrigin = mm.matchedCoords;
+          console.log('[NAV] Using map matched origin for initial route:', { origin: enhancedOrigin, confidence: mm.confidence });
+        }
+      }
+      
+      // Build URL with bearing constraints for road-following accuracy
+      const coords = `${enhancedOrigin[0]},${enhancedOrigin[1]};${startPoint[0]},${startPoint[1]}`;
+      const params = new URLSearchParams({
+        geometries: 'geojson',
+        steps: 'true',
+        banner_instructions: 'true',
+        voice_instructions: 'true',
+        alternatives: 'false',
+        continue_straight: 'false',
+        access_token: token,
+      });
+      
+      // Add ultra-tight bearing constraint for maximum precision
+      if (bearing !== null) {
+        params.append('bearings', `${Math.round(bearing)},30;`); // Ultra-tight 30° tolerance for precise road-following
+      }
+      
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?${params.toString()}`;
+      
+      console.log('[NAV] Enhanced Mapbox API request:', { 
+        origin: enhancedOrigin, 
+        destination: startPoint, 
+        bearing, 
+        url 
+      });
+      
       const response = await fetch(url);
       const data = await response.json();
       console.log('[NAV] Mapbox API response:', JSON.stringify(data, null, 2));
@@ -359,9 +764,13 @@ const NavigationScreen = () => {
         });
         
         setNavigationToStartRoute(coordinates);
+        navigationToStartRouteRef.current = coordinates;
+        routeETARef.current = data.routes[0].duration; // Store initial ETA for comparison
         setNavigationSteps(steps);
         setDistanceToStart(distance);
         setNavigationToStartError(null);
+        
+        // Initial dynamic route will be created on next location update
         
         // Always show skip button - user should have option to skip even if route is found
         setShowSkipButton(true);
@@ -972,24 +1381,38 @@ const NavigationScreen = () => {
         />
 
         {/* Navigation to Start Route - Google Maps Style (TO_START phase only) */}
+        {/* Dynamic Navigation to Start Route - Orange Line */}
         {(() => {
-          console.log('[NAV RENDER] Orange line check:', {
+          const shouldRenderDynamic = navigationPhase === 'TO_START' && dynamicRouteCoordinates && dynamicRouteCoordinates.length > 0 && navigationState.userLocation;
+          const shouldRenderFallback = navigationPhase === 'TO_START' && navigationToStartRoute && navigationToStartRoute.length > 0 && navigationState.userLocation;
+          const shouldRender = shouldRenderDynamic || shouldRenderFallback;
+          
+          console.log('[NAV] Route line render check:', {
             navigationPhase,
-            hasNavToStartRoute: !!navigationToStartRoute,
-            routeLength: navigationToStartRoute?.length || 0
+            hasDynamicRouteCoordinates: !!dynamicRouteCoordinates,
+            dynamicRouteLength: dynamicRouteCoordinates?.length || 0,
+            hasNavigationToStartRoute: !!navigationToStartRoute,
+            navigationToStartRouteLength: navigationToStartRoute?.length || 0,
+            hasUserLocation: !!navigationState.userLocation,
+            shouldRenderDynamic,
+            shouldRenderFallback,
+            shouldRender
           });
-          return navigationPhase === 'TO_START' && navigationToStartRoute && navigationToStartRoute.length > 0;
-        })() && navigationToStartRoute && (
+          return shouldRender;
+        })() && (
           <>
             {/* Route Casing (Border) - Darker outline */}
             <MapboxGL.ShapeSource 
+              key={`navToStartCasing-${navigationState.userLocation!.latitude.toFixed(6)}-${navigationState.userLocation!.longitude.toFixed(6)}`}
               id="navToStartCasingSource" 
               shape={{
                 type: 'Feature',
                 properties: {},
                 geometry: {
                   type: 'LineString',
-                  coordinates: navigationToStartRoute!,
+                  coordinates: dynamicRouteCoordinates && dynamicRouteCoordinates.length > 0
+                    ? dynamicRouteCoordinates
+                    : navigationToStartRoute!,
                 },
               }}
             >
@@ -1007,13 +1430,16 @@ const NavigationScreen = () => {
 
             {/* Main Route Line - Bright Orange */}
             <MapboxGL.ShapeSource 
+              key={`navToStartMain-${navigationState.userLocation!.latitude.toFixed(6)}-${navigationState.userLocation!.longitude.toFixed(6)}`}
               id="navToStartSource" 
               shape={{
                 type: 'Feature',
                 properties: {},
                 geometry: {
                   type: 'LineString',
-                  coordinates: navigationToStartRoute!,
+                  coordinates: dynamicRouteCoordinates && dynamicRouteCoordinates.length > 0
+                    ? dynamicRouteCoordinates
+                    : navigationToStartRoute!,
                 },
               }}
             >
@@ -1031,13 +1457,16 @@ const NavigationScreen = () => {
 
             {/* Direction Arrows along the route - Google Maps style */}
             <MapboxGL.ShapeSource 
+              key={`navToStartArrows-${navigationState.userLocation!.latitude.toFixed(6)}-${navigationState.userLocation!.longitude.toFixed(6)}`}
               id="navToStartArrowsSource" 
               shape={{
                 type: 'Feature',
                 properties: {},
                 geometry: {
                   type: 'LineString',
-                  coordinates: navigationToStartRoute!,
+                  coordinates: dynamicRouteCoordinates && dynamicRouteCoordinates.length > 0
+                    ? dynamicRouteCoordinates
+                    : navigationToStartRoute!,
                 },
               }}
             >
@@ -1150,54 +1579,20 @@ const NavigationScreen = () => {
           </MapboxGL.PointAnnotation>
         )}
 
-           {/* Custom User Location Marker with Profile Picture - SymbolLayer Approach */}
-         {navigationState.userLocation && (() => {
-           const avatarUrl = userProfile?.avatar_url || user?.avatar;
-           console.log('[NAVIGATION] Map marker - userProfile:', userProfile);
-           console.log('[NAVIGATION] Map marker - user.avatar:', user?.avatar);
-           console.log('[NAVIGATION] Map marker - avatarUrl:', avatarUrl);
-           console.log('[NAVIGATION] Map marker - userLocation:', navigationState.userLocation);
-           return null;
-         })()}
-         {navigationState.userLocation && (
-           <MapboxGL.ShapeSource 
-             id="user-location-source" 
-             shape={{
-               type: 'FeatureCollection',
-               features: [{
-                 type: 'Feature',
-                 geometry: {
-                   type: 'Point',
-                   coordinates: [navigationState.userLocation.longitude, navigationState.userLocation.latitude]
-                 },
-                 properties: {}
-               }]
-             }}
-           >
-             <MapboxGL.SymbolLayer
-               id="user-location"
-               style={{
-                 iconImage: 'user-avatar',
-                 iconSize: 0.5, // Larger size for visibility
-                 iconAllowOverlap: true,
-                 iconIgnorePlacement: true,
-                 iconAnchor: 'center',
-                 iconPitchAlignment: 'map',
-                 iconRotationAlignment: 'map',
-                 iconTextFit: 'none',
-                 iconTextFitPadding: [0, 0, 0, 0],
-               }}
-             />
-             <MapboxGL.Images 
-               images={{ 
-                 'user-avatar': (userProfile?.avatar_url || user?.avatar) ? 
-                   { uri: `https://images.weserv.nl/?url=${encodeURIComponent(userProfile?.avatar_url || user?.avatar)}&w=64&h=64&fit=cover&mask=circle&border=3,4285F4` } : 
-                   { uri: 'https://ui-avatars.com/api/?name=U&background=4285F4&color=FFFFFF&size=64&rounded=true&bold=true' } // Fallback
-               }} 
-             />
-           </MapboxGL.ShapeSource>
-         )}
+        {/* Custom User Location Marker with Profile Picture */}
+        <MapboxGL.Images 
+          images={{ 
+            'user-avatar': (userProfile?.avatar_url || user?.avatar) ? 
+              { uri: `https://images.weserv.nl/?url=${encodeURIComponent(userProfile?.avatar_url || user?.avatar)}&w=64&h=64&fit=cover&mask=circle&border=3,4285F4` } : 
+              { uri: 'https://ui-avatars.com/api/?name=U&background=4285F4&color=FFFFFF&size=64&rounded=true&bold=true' } // Fallback
+          }} 
+        />
+        <MapboxGL.LocationPuck
+          visible={true}
+          topImage="user-avatar"
+        />
       </MapboxGL.MapView>
+
 
 
       {/* Back Button - Top Left */}
@@ -2304,9 +2699,20 @@ const styles = StyleSheet.create({
   
    // Custom User Location Marker Styles
   userLocationMarker: {
-     alignItems: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#4285F4',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
     justifyContent: 'center',
-   },
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 8,
+  },
    userLocationPuck: {
      width: 40,
      height: 40,
@@ -2316,19 +2722,33 @@ const styles = StyleSheet.create({
      borderColor: '#4285F4',
     alignItems: 'center',
      justifyContent: 'center',
-     shadowColor: '#000',
-     shadowOffset: { width: 0, height: 2 },
-     shadowOpacity: 0.25,
-     shadowRadius: 4,
-     elevation: 5,
-   },
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
    userLocationAvatar: {
      width: 34,
      height: 34,
      borderRadius: 17,
      backgroundColor: '#f0f0f0', // Debug background to see if image container is there
    },
-   userLocationPulse: {
+   userLocationFallback: {
+     position: 'absolute',
+     width: 34,
+     height: 34,
+     borderRadius: 17,
+     backgroundColor: '#4285F4',
+     justifyContent: 'center',
+     alignItems: 'center',
+   },
+   userLocationInitials: {
+     color: 'white',
+     fontSize: 16,
+     fontWeight: 'bold',
+  },
+  userLocationPulse: {
      position: 'absolute',
      width: 60,
      height: 60,
@@ -2360,6 +2780,15 @@ const styles = StyleSheet.create({
      borderRadius: 4,
      backgroundColor: '#FFFFFF',
    },
+   
+  testMarker: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FF0000', // Bright red for visibility
+    zIndex: 1000,
+  },
 });
 
 export default NavigationScreen;

@@ -8,7 +8,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "jest"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -41,6 +42,7 @@
     "expo-system-ui": "~6.0.7",
     "expo-web-browser": "~15.0.7",
     "fast-xml-parser": "^5.2.5",
+    "lodash.debounce": "^4.0.8",
     "mapbox-gl": "^2.15.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -59,9 +61,13 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@types/jest": "^30.0.0",
+    "@types/lodash.debounce": "^4.0.9",
     "@types/react": "~19.1.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.5",
     "typescript": "~5.9.2"
   },
   "private": true
