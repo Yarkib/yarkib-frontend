@@ -1,15 +1,15 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Linking, FlatList, Dimensions, Alert, Platform } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { theme } from '../src/theme';
-import { fetchRouteDetails, fetchRouteElevation, fetchRouteCoordinates, userRoutesApi } from '../src/utils/api';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Linking, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ElevationChart from '../src/components/ElevationChart';
+import MapRouteCard from '../src/components/MapRouteCard';
 import RouteActionButtons from '../src/components/RouteActionButtons';
 import WaypointsSection from '../src/components/WaypointsSection';
-import MapRouteCard from '../src/components/MapRouteCard';
 import { useAuth } from '../src/context/AuthContext';
+import { theme } from '../src/theme';
 import { AuthContextType } from '../src/types/auth';
+import { fetchRouteCoordinates, fetchRouteDetails, fetchRouteElevation, userRoutesApi } from '../src/utils/api';
 
 const RouteDetails = () => {
   console.log(`[FRONTEND] RouteDetails: Component mounted`);
@@ -180,12 +180,14 @@ const RouteDetails = () => {
   }, [route?.id]);
 
 
+
   const formatDuration = (minutes?: number) => {
     if (!minutes && minutes !== 0) return '—';
     const h = Math.floor((minutes || 0) / 60);
     const m = (minutes || 0) % 60;
     return `${h > 0 ? `${h}h ` : ''}${m}m`;
   };
+
 
   const handleOpenLink = async (url: string) => {
     try {

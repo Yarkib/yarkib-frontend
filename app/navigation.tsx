@@ -8,19 +8,21 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  Animated,
+  Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { getApiBaseUrl } from '../src/config/config';
 import { useAuth } from '../src/context/AuthContext';
 import { waypointsApi } from '../src/utils/api';
-import { createDynamicRouteCoordinates, findClosestPointOnRoute } from './utils/navigationRouteHelpers';
+import { createDynamicRouteCoordinates, findClosestPointOnRoute, haversineDistanceMeters, projectPointOntoSegment } from './utils/navigationRouteHelpers';
 
 // Helper function for array comparison
 function arraysEqual(a: Array<[number,number]> | null, b: Array<[number,number]> | null): boolean {
@@ -134,6 +136,33 @@ const NavigationScreen = () => {
   const { routeData } = useLocalSearchParams<{ routeData: string }>();
   const { user } = useAuth() as { user: any };
   const [route, setRoute] = useState<RouteData | null>(null);
+  // Keep a normalized copy of the library route for ON_ROUTE calculations
+  const normalizedRouteCoordsRef = useRef<Array<[number, number]> | null>(null);
+  const totalRouteMetersRef = useRef<number>(0);
+  // State to track when route coordinates are ready (for camera effect dependency)
+  const [routeCoordsReady, setRouteCoordsReady] = useState(false);
+  
+  useEffect(() => {
+    console.log('[NAV] Route normalization effect triggered, route:', route?.id || 'no-id', 'coords:', route?.coordinates?.length || 0);
+    if (route && Array.isArray(route.coordinates) && route.coordinates.length > 1) {
+      const normalized = (route.coordinates as Array<[number, number]>).map(ensureLngLat);
+      normalizedRouteCoordsRef.current = normalized;
+      let total = 0;
+      for (let i = 0; i < normalized.length - 1; i++) {
+        const A = normalized[i];
+        const B = normalized[i + 1];
+        total += haversineDistanceMeters(A[1], A[0], B[1], B[0]);
+      }
+      totalRouteMetersRef.current = total;
+      setRouteCoordsReady(true); // Signal that route coordinates are ready
+      console.log('[NAV] Route normalized:', normalized.length, 'points, total meters:', total.toFixed(0));
+    } else {
+      normalizedRouteCoordsRef.current = null;
+      totalRouteMetersRef.current = 0;
+      setRouteCoordsReady(false);
+      console.warn('[NAV] Route coordinates invalid or missing');
+    }
+  }, [route]);
   const [mapboxToken, setMapboxToken] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(true);
   const [locationPermission, setLocationPermission] = useState(false);
@@ -155,6 +184,7 @@ const NavigationScreen = () => {
   const [showStartReminder, setShowStartReminder] = useState(false);
   const [hasAttemptedNavToStart, setHasAttemptedNavToStart] = useState(false);
   const [followUserLocation, setFollowUserLocation] = useState(true);
+  const [mapOrientationMode, setMapOrientationMode] = useState<'north-up' | 'heading-up'>('north-up');
   const [lastRecalculationTime, setLastRecalculationTime] = useState<number>(0);
   const [originalRouteCoordinates, setOriginalRouteCoordinates] = useState<[number, number][] | null>(null);
   
@@ -281,10 +311,177 @@ const NavigationScreen = () => {
   // Major points state
   const [majorPoints, setMajorPoints] = useState<MajorPoint[]>([]);
   const [loadingMajorPoints, setLoadingMajorPoints] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
   
   // Navigation waypoints state
   const [navigationWaypoints, setNavigationWaypoints] = useState<any[]>([]);
   const [loadingNavigationWaypoints, setLoadingNavigationWaypoints] = useState(false);
+  const [showMileWaypoints, setShowMileWaypoints] = useState(false); // Toggle state
+
+  // Skipped waypoints state
+  const [skippedWaypointIds, setSkippedWaypointIds] = useState<Set<string>>(new Set());
+  const [selectedWaypoint, setSelectedWaypoint] = useState<MajorPoint | null>(null);
+  const [showWaypointActionSheet, setShowWaypointActionSheet] = useState(false);
+  const [showWaypointManagementModal, setShowWaypointManagementModal] = useState(false);
+  const [showMajorWaypointsModal, setShowMajorWaypointsModal] = useState(false);
+  
+  // Animation values for major waypoints modal
+  const majorWaypointsModalSlideAnim = useRef(new Animated.Value(300)).current;
+  const majorWaypointsModalOpacityAnim = useRef(new Animated.Value(0)).current;
+  const majorWaypointsCardAnims = useRef<{ [key: string]: Animated.Value }>({}).current;
+
+  // Generate navigation waypoints every 1 mile along the current route
+  const MILE_IN_METERS = 1609.344;
+  const generateMileWaypointsFromLine = (coords: Array<[number, number]>) => {
+    if (!coords || coords.length < 2) return [] as any[];
+    const cumulative: number[] = [0];
+    for (let i = 1; i < coords.length; i++) {
+      const a = coords[i - 1];
+      const b = coords[i];
+      const d = haversineDistanceMeters(a[1], a[0], b[1], b[0]);
+      cumulative.push(cumulative[i - 1] + d);
+    }
+    const total = cumulative[cumulative.length - 1];
+    if (total < MILE_IN_METERS) return [] as any[];
+    const results: any[] = [];
+    for (let target = MILE_IN_METERS, n = 1; target < total; target += MILE_IN_METERS, n++) {
+      let seg = -1;
+      for (let i = 0; i < cumulative.length - 1; i++) {
+        if (cumulative[i] <= target && target <= cumulative[i + 1]) { seg = i; break; }
+      }
+      if (seg === -1) continue;
+      const A = coords[seg];
+      const B = coords[seg + 1];
+      const segLen = cumulative[seg + 1] - cumulative[seg];
+      const t = segLen > 0 ? (target - cumulative[seg]) / segLen : 0;
+      const lng = A[0] + (B[0] - A[0]) * t;
+      const lat = A[1] + (B[1] - A[1]) * t;
+      results.push({
+        id: `nav-mile-${n}`,
+        name: `📍 ${n} mi`, // Clear mile marker prefix
+        point_type: 'nav_mile',
+        distance_from_start: target / 1000,
+        lon: lng,
+        lat,
+      });
+    }
+    return results;
+  };
+
+  // Handler for skipping/unskipping waypoints
+  const handleToggleSkipWaypoint = (waypointId: string) => {
+    setSkippedWaypointIds(prev => {
+      const newSet = new Set(prev);
+      const wasSkipped = newSet.has(waypointId);
+      if (wasSkipped) {
+        newSet.delete(waypointId);
+      } else {
+        newSet.add(waypointId);
+      }
+      // Update the major point status
+      setMajorPoints(prevPoints => prevPoints.map(p => 
+        p.id === waypointId 
+          ? { ...p, status: wasSkipped ? 'upcoming' : 'skipped' }
+          : p
+      ));
+      return newSet;
+    });
+  };
+
+  // Handler for waypoint action sheet (tap on marker)
+  const handleWaypointPress = (waypointId: string) => {
+    const waypoint = majorPoints.find(p => p.id === waypointId) || 
+                     navigationWaypoints.find((p: any) => p.id === waypointId);
+    if (waypoint) {
+      setSelectedWaypoint(waypoint as MajorPoint);
+      setShowWaypointActionSheet(true);
+    }
+  };
+
+  const handleToggleMileWaypoints = () => {
+    // Toggle the visibility state
+    const newState = !showMileWaypoints;
+    setShowMileWaypoints(newState);
+    
+    if (newState) {
+      // Generate waypoints when toggling ON
+      try {
+        setLoadingNavigationWaypoints(true);
+        let base: Array<[number, number]> | null = null;
+        if (
+          navigationPhase === 'ON_ROUTE' &&
+          route && Array.isArray((route as any).coordinates) && (route as any).coordinates.length > 1
+        ) {
+          base = (route as any).coordinates as Array<[number, number]>;
+        } else if (navigationPhase === 'TO_START') {
+          if (dynamicRouteCoordinates && dynamicRouteCoordinates.length > 1) {
+            base = dynamicRouteCoordinates as Array<[number, number]>;
+          } else if (navigationToStartRouteRef.current && navigationToStartRouteRef.current.length > 1) {
+            base = navigationToStartRouteRef.current as Array<[number, number]>;
+          }
+        }
+        if (!base) {
+          setNavigationWaypoints([]);
+          setShowMileWaypoints(false); // Revert toggle if no route available
+          return;
+        }
+        setNavigationWaypoints(generateMileWaypointsFromLine(base));
+      } finally {
+        setLoadingNavigationWaypoints(false);
+      }
+    } else {
+      // Clear waypoints when toggling OFF
+      setNavigationWaypoints([]);
+    }
+  };
+
+  // Calculate distance_from_start for any waypoint based on route coordinates
+  const calculateDistanceFromRouteStart = (
+    waypointLat: number,
+    waypointLon: number,
+    routeCoords: Array<[number, number]>
+  ): number => {
+    if (!routeCoords || routeCoords.length < 2) return 0;
+    
+    // Find the closest segment on the route
+    let minDist = Infinity;
+    let closestSegmentIndex = 0;
+    let closestProjection: [number, number] | null = null;
+    
+    for (let i = 0; i < routeCoords.length - 1; i++) {
+      const A = routeCoords[i];
+      const B = routeCoords[i + 1];
+      const { proj } = projectPointOntoSegment(A, B, [waypointLon, waypointLat]);
+      const dist = haversineDistanceMeters(waypointLat, waypointLon, proj[1], proj[0]);
+      
+      if (dist < minDist) {
+        minDist = dist;
+        closestSegmentIndex = i;
+        closestProjection = proj;
+      }
+    }
+    
+    if (!closestProjection) return 0;
+    
+    // Calculate cumulative distance from start to the projected point
+    let totalDist = 0;
+    for (let i = 0; i <= closestSegmentIndex; i++) {
+      if (i < routeCoords.length - 1) {
+        const A = routeCoords[i];
+        const B = routeCoords[i + 1];
+        
+        if (i === closestSegmentIndex) {
+          // For the closest segment, calculate distance to the projected point
+          totalDist += haversineDistanceMeters(A[1], A[0], closestProjection[1], closestProjection[0]);
+        } else {
+          // For previous segments, add full segment distance
+          totalDist += haversineDistanceMeters(A[1], A[0], B[1], B[0]);
+        }
+      }
+    }
+    
+    return totalDist / 1000; // Return in kilometers
+  };
   
   // User profile state
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -329,26 +526,43 @@ const NavigationScreen = () => {
     currentStepIndex: 0,
   });
 
-  // Mock data for demonstration
-  const mockCurrentPosition = 35; // 35% through the route
-
   // Get major points progress (real data from database)
   const completedPoints = majorPoints.filter(p => p.status === 'completed');
   const totalPoints = majorPoints.length;
   const progressPercentage = totalPoints > 0 ? (completedPoints.length / totalPoints) * 100 : 0;
   
-  // Calculate progress based on current position for the progress line
-  // Since we reversed the order (destination at top, start at bottom), 
-  // the progress line should show completion from bottom to current position
-  const currentPositionProgress = mockCurrentPosition; // 35% from bottom
-  const mockTimeToNextStop = 12; // 12 minutes to next stop
-  const mockNextStopName = "Shell Gas Station";
+  // Calculate current position percentage based on remaining distance
+  const currentPositionPercentage = (() => {
+    const total = totalRouteMetersRef.current || 0;
+    if (!total || navigationState.distanceRemaining <= 0) {
+      return 0;
+    }
+    const completed = Math.max(0, Math.min(total, total - navigationState.distanceRemaining));
+    return (completed / total) * 100;
+  })();
   
-  // Calculate current position percentage (using mock data for now)
-  const currentPositionPercentage = totalPoints > 0 ? mockCurrentPosition : 0;
+  // Progress line completion (reversed list UI)
+  const currentPositionProgress = currentPositionPercentage; // percent from start → used in UI
 
   const mapRef = useRef<MapboxGL.MapView>(null);
   const cameraRef = useRef<MapboxGL.Camera>(null);
+  
+  // Guidance tuning (metrics)
+  const OFF_ROUTE_THRESHOLD_M = 30;   // mark off-route
+  const REROUTE_THRESHOLD_M = 50;     // trigger reroute
+  const TURN_WARNING_DISTANCES_M = [400, 200, 50];
+  
+  // Smoothing caches
+  const recentBearingsRef = useRef<number[]>([]);
+  const recentSpeedsRef = useRef<number[]>([]);
+  
+  // Off-route and reroute gating
+  const [isOffRoute, setIsOffRoute] = useState(false);
+  const lastRerouteMsRef = useRef<number>(0);
+  
+  // Region-change debounce to avoid flicker
+  const lastRegionUserMsRef = useRef<number>(0);
+  const isRecenterInProgressRef = useRef<boolean>(false);
 
   // Scroll snap-back functionality
   const handleScroll = () => {
@@ -363,7 +577,7 @@ const NavigationScreen = () => {
     const timeout = setTimeout(() => {
       snapToCurrentPosition();
       setIsScrolling(false);
-    }, 2000); // 2 seconds after scrolling stops
+    }, 4000); // 2 seconds after scrolling stops
     
     setScrollTimeout(timeout);
   };
@@ -372,41 +586,57 @@ const NavigationScreen = () => {
   const snapToCurrentPosition = () => {
     if (!scrollViewRef.current) return;
     
-    // Find the current waypoint index (where bike icon is)
+    // Build the same waypoint list and order as the UI (destination → start)
+    const routeCoords = (route?.coordinates && Array.isArray(route.coordinates) && route.coordinates.length > 1)
+      ? route.coordinates as Array<[number, number]>
+      : null;
+    
     const allWaypoints = [
-      ...majorPoints.map(p => ({ ...p, isMajor: true })),
-      ...navigationWaypoints.map(p => ({ ...p, isMajor: false }))
+      ...majorPoints.map(p => ({
+        ...p,
+        isMajor: true,
+        distance_from_start: routeCoords
+          ? calculateDistanceFromRouteStart(p.lat, p.lon, routeCoords)
+          : p.distance_from_start || 0
+      })),
+      ...(showMileWaypoints ? navigationWaypoints.map(p => ({
+        ...p,
+        isMajor: false,
+        point_type: p.point_type || 'nav_mile',
+        distance_from_start: routeCoords
+          ? calculateDistanceFromRouteStart(p.lat, p.lon, routeCoords)
+          : p.distance_from_start || 0
+      })) : [])
     ].sort((a, b) => b.distance_from_start - a.distance_from_start);
-    
-    const currentPosition = mockCurrentPosition; // 35%
-    const waypointProgress = (index: number) => (index / (allWaypoints.length - 1)) * 100;
-    
-    // Find the waypoint that contains the current position
+
+    const totalRouteMeters = totalRouteMetersRef.current || 1;
+    const currentPosition = currentPositionPercentage; // 0..100
+
+    // Compute percentage positions for each waypoint based on real distance
+    const waypointPercents = allWaypoints.map(wp => {
+      const meters = (wp.distance_from_start || 0) * 1000;
+      return Math.max(0, Math.min(100, (meters / totalRouteMeters) * 100));
+    });
+
+    // Find segment containing the rider (descending order): prev >= current >= curr
     let targetIndex = 0;
-    for (let i = 0; i < allWaypoints.length - 1; i++) {
-      const currentProgress = waypointProgress(i);
-      const nextProgress = waypointProgress(i + 1);
-      
-      if (currentPosition >= currentProgress && currentPosition < nextProgress) {
+    for (let i = 0; i < waypointPercents.length; i++) {
+      const currPct = waypointPercents[i];
+      const prevPct = i === 0 ? 100 : waypointPercents[i - 1];
+      if (currentPosition <= prevPct && currentPosition >= currPct) {
         targetIndex = i;
         break;
       }
     }
-    
+
     // Calculate scroll position to center on the target waypoint
-    const itemHeight = 32; // More accurate height per waypoint item
-    const containerHeight = 120; // Height of the scroll container
+    const itemHeight = 32; // item height in this list
+    const containerHeight = 120; // visible container height
     const visibleItems = Math.floor(containerHeight / itemHeight);
-    
-    // Center the target waypoint in the visible area
     const centerOffset = Math.floor(visibleItems / 2);
     const scrollPosition = Math.max(0, (targetIndex - centerOffset) * itemHeight);
-    
-    // Smooth scroll to the target position
-    scrollViewRef.current.scrollTo({
-      y: scrollPosition,
-      animated: true,
-    });
+
+    scrollViewRef.current.scrollTo({ y: scrollPosition, animated: true });
   };
 
   // Parse route data
@@ -422,6 +652,69 @@ const NavigationScreen = () => {
       }
     }
   }, [routeData]);
+
+  // Track route ID to detect changes
+  const prevRouteIdRef = useRef<string | null>(null);
+  
+  // Reset navigation state when route changes (prevents stale cached values from previous routes)
+  useEffect(() => {
+    const currentRouteId = route?.id || null;
+    if (currentRouteId && currentRouteId !== prevRouteIdRef.current) {
+      console.log('[NAVIGATION] Route changed (ID:', currentRouteId, '), resetting navigation state to clear cache');
+      prevRouteIdRef.current = currentRouteId;
+      
+      // Reset navigation state - distanceRemaining will be calculated on next GPS update
+      setNavigationState(prev => ({
+        ...prev,
+        distanceRemaining: 0, // Reset to 0, will be recalculated from actual GPS position
+        timeRemaining: 0,
+        nextTurnDistance: 0,
+        nextTurnInstruction: 'Loading navigation...',
+        nextTurnType: 'straight',
+        currentProgress: 0,
+        currentStepIndex: 0,
+      }));
+      // Reset navigation routes
+      setNavigationToStartRoute(null);
+      setDynamicRouteCoordinates(null);
+      navigationToStartRouteRef.current = null;
+      dynamicRouteCoordinatesRef.current = null;
+    }
+  }, [route?.id]); // Reset when route ID changes
+
+  // Trigger position calculation when route coordinates become available and we have a user location
+  useEffect(() => {
+    if (
+      navigationPhase === 'ON_ROUTE' &&
+      route?.coordinates &&
+      route.coordinates.length > 0 &&
+      normalizedRouteCoordsRef.current &&
+      normalizedRouteCoordsRef.current.length > 0 &&
+      navigationState.userLocation &&
+      navigationState.distanceRemaining === 0
+    ) {
+      console.log('[NAVIGATION] Route coordinates available, triggering position calculation');
+      // Trigger a position update by calling handleLocationUpdate with current location
+      if (navigationState.userLocation) {
+        const fakeLocation = {
+          coords: {
+            latitude: navigationState.userLocation.latitude,
+            longitude: navigationState.userLocation.longitude,
+            altitude: null,
+            accuracy: 5,
+            altitudeAccuracy: null,
+            heading: navigationState.heading || 0,
+            speed: navigationState.currentSpeed ? navigationState.currentSpeed / 3.6 : 0,
+          },
+          timestamp: Date.now(),
+        } as Location.LocationObject;
+        // Use setTimeout to avoid calling during render
+        setTimeout(() => {
+          handleLocationUpdate(fakeLocation);
+        }, 50);
+      }
+    }
+  }, [route?.coordinates?.length, navigationState.userLocation?.latitude, navigationState.distanceRemaining, navigationPhase]);
 
   // Initialize Mapbox and request location permissions
   useEffect(() => {
@@ -522,6 +815,13 @@ const NavigationScreen = () => {
     if (recentPointsRef.current.length > 8) {
       recentPointsRef.current.shift();
     }
+    // Smooth heading & speed caches
+    if (typeof coords.heading === 'number') {
+      recentBearingsRef.current.push(coords.heading);
+      if (recentBearingsRef.current.length > 5) recentBearingsRef.current.shift();
+    }
+    recentSpeedsRef.current.push((coords.speed || 0) * 3.6);
+    if (recentSpeedsRef.current.length > 5) recentSpeedsRef.current.shift();
       
     // Update navigation state with real GPS data
     setNavigationState(prev => {
@@ -603,6 +903,179 @@ const NavigationScreen = () => {
         console.log('[NAV] No route data available for projection check');
       }
     }
+  // Update top navigation card while ON_ROUTE (using library route geometry)
+  else if (navigationPhase === 'ON_ROUTE') {
+    try {
+      const normalized = normalizedRouteCoordsRef.current;
+      if (normalized && normalized.length > 1) {
+        console.log('[NAV] ON_ROUTE: Calculating position, normalized coords:', normalized.length, 'points, totalRouteMeters:', totalRouteMetersRef.current);
+        const userPoint: [number, number] = [userLoc.longitude, userLoc.latitude];
+        const closest = findClosestPointOnRoute(normalized as Array<[number,number]>, userPoint);
+        // Off-route detection
+        const offRouteNow = closest.distanceMeters > OFF_ROUTE_THRESHOLD_M;
+        if (offRouteNow !== isOffRoute) setIsOffRoute(offRouteNow);
+
+        // Compute remaining distance from projected point to end of route
+        let remaining = 0;
+        const proj = closest.projectedPoint as [number, number];
+        // distance from projected point to end of its segment end
+        const segEnd = normalized[closest.segmentIndex + 1] as [number, number];
+        remaining += haversineDistanceMeters(proj[1], proj[0], segEnd[1], segEnd[0]);
+        for (let i = closest.segmentIndex + 1; i < normalized.length - 1; i++) {
+          const A = normalized[i] as [number, number];
+          const B = normalized[i + 1] as [number, number];
+          remaining += haversineDistanceMeters(A[1], A[0], B[1], B[0]);
+        }
+
+        // Clamp to total route meters to avoid spikes
+        const totalMeters = totalRouteMetersRef.current || remaining;
+        remaining = Math.max(0, Math.min(remaining, totalMeters));
+
+        // Time remaining fallback: distance / max(speed, 5 km/h)
+        const speedMs = (coords.speed ?? 0);
+        const speedKmh = Math.max(speedMs * 3.6, 5); // cap minimum for stable ETA
+        const timeSec = (remaining / 1000) / (speedKmh / 60) * 60; // km / (km/h) → h → s
+
+        // Infer upcoming turn based on bearing change at segment boundary
+        const segIdx = closest.segmentIndex;
+        const segEndPt = normalized[Math.min(segIdx + 1, normalized.length - 1)] as [number, number];
+        const afterIdx = Math.min(segIdx + 2, normalized.length - 1);
+        const afterPt = normalized[afterIdx] as [number, number];
+        const b1 = computeBearing([proj[0], proj[1]], [segEndPt[0], segEndPt[1]]);
+        const b2 = computeBearing([segEndPt[0], segEndPt[1]], [afterPt[0], afterPt[1]]);
+        let delta = ((b2 - b1 + 540) % 360) - 180; // normalize to [-180,180]
+        const isLeft = delta < -35; // threshold degrees
+        const isRight = delta > 35;
+
+        const nextTurnDist = haversineDistanceMeters(userLoc.latitude, userLoc.longitude, segEndPt[1], segEndPt[0]);
+        let nextType: 'turn-right' | 'turn-left' | 'straight' | 'arrive' = 'straight';
+        if (isLeft) nextType = 'turn-left';
+        else if (isRight) nextType = 'turn-right';
+        else nextType = 'straight';
+
+        // Multi-stage warnings
+        let nextInstr = '';
+        const distLabel = nextTurnDist < 1000 ? `${Math.round(nextTurnDist)} m` : `${(nextTurnDist/1000).toFixed(1)} km`;
+        if (nextTurnDist <= 15) {
+          nextInstr = nextType === 'straight' ? 'Arrive ahead' : (nextType === 'turn-left' ? 'Turn left now' : 'Turn right now');
+        } else if (nextTurnDist <= TURN_WARNING_DISTANCES_M[2]) {
+          nextInstr = nextType === 'straight' ? 'Continue' : `${nextType === 'turn-left' ? 'Turn left' : 'Turn right'} in ${distLabel}`;
+        } else if (nextTurnDist <= TURN_WARNING_DISTANCES_M[1]) {
+          nextInstr = nextType === 'straight' ? 'Continue' : `${nextType === 'turn-left' ? 'Prepare to turn left' : 'Prepare to turn right'} (${distLabel})`;
+        } else if (nextTurnDist <= TURN_WARNING_DISTANCES_M[0]) {
+          nextInstr = nextType === 'straight' ? 'Continue' : `${nextType === 'turn-left' ? 'In 400 m, turn left' : 'In 400 m, turn right'}`;
+        } else {
+          nextInstr = nextType === 'straight' ? 'Continue' : `${nextType === 'turn-left' ? 'Ahead: left turn' : 'Ahead: right turn'}`;
+        }
+
+        const distanceRemainingMeters = Math.max(0, Math.round(remaining));
+        console.log('[NAV] ON_ROUTE: Updated position - distanceRemaining:', distanceRemainingMeters, 'm, totalRoute:', totalRouteMetersRef.current, 'm, position%:', ((totalRouteMetersRef.current - distanceRemainingMeters) / totalRouteMetersRef.current * 100).toFixed(1));
+        
+        const newSpeed = Math.round((coords.speed || 0) * 3.6);
+        const newTurnDistance = Math.max(0, Math.round(nextTurnDist));
+        
+        setNavigationState(prev => ({
+          ...prev,
+          currentSpeed: newSpeed,
+          userLocation: userLoc,
+          heading: coords.heading || 0,
+          distanceRemaining: distanceRemainingMeters, // meters
+          timeRemaining: Math.max(0, Math.round(timeSec)), // seconds
+          nextTurnDistance: newTurnDistance,
+          nextTurnInstruction: nextInstr,
+          nextTurnType: nextType,
+        }));
+        
+        // Immediate camera update if speed, turn distance, or heading changed significantly
+        // In heading-up mode, update immediately on any heading change for smooth rotation
+        if (
+          cameraRef.current &&
+          followUserLocation &&
+          normalizedRouteCoordsRef.current &&
+          normalizedRouteCoordsRef.current.length > 1
+        ) {
+          const prevSpeed = navigationState.currentSpeed || 0;
+          const prevTurnDist = navigationState.nextTurnDistance || 0;
+          const prevHeading = navigationState.heading || 0;
+          const newHeading = coords.heading || 0;
+          
+          const speedChanged = Math.abs(newSpeed - prevSpeed) > 10;
+          const turnDistChanged = Math.abs(newTurnDistance - prevTurnDist) > 50;
+          // In heading-up mode, update on any heading change (even small ones) for smooth rotation
+          const headingChanged = mapOrientationMode === 'heading-up' 
+            ? Math.abs(newHeading - prevHeading) > 5 // 5 degree threshold for heading-up
+            : false;
+          
+          if (speedChanged || turnDistChanged || headingChanged) {
+            // Immediate camera update for significant changes
+            const dynamicZoom = calculateDynamicZoom(newSpeed, newTurnDistance);
+            const heading = mapOrientationMode === 'heading-up' ? newHeading : 0;
+            
+            let cameraCenter: { latitude: number; longitude: number };
+            
+            if (mapOrientationMode === 'north-up') {
+              // In north-up mode: center the user location in the middle of the screen
+              cameraCenter = { latitude: userLoc.latitude, longitude: userLoc.longitude };
+            } else {
+              // In heading-up mode: position user at bottom-third, show route ahead
+              const predictivePos = calculatePredictivePosition(userLoc, heading, newSpeed);
+              
+              if (normalizedRouteCoordsRef.current) {
+                const userPoint: [number, number] = [userLoc.longitude, userLoc.latitude];
+                const closest = findClosestPointOnRoute(normalizedRouteCoordsRef.current, userPoint);
+                const routeCoords = normalizedRouteCoordsRef.current;
+                const zoomFactor = dynamicZoom / 17;
+                const screenOffsetMeters = 150 / zoomFactor;
+                let aheadPoint: [number, number] | null = null;
+                const proj = closest.projectedPoint;
+                
+                if (closest.segmentIndex + 1 < routeCoords.length) {
+                  const segEnd = routeCoords[closest.segmentIndex + 1];
+                  const segDist = haversineDistanceMeters(proj[1], proj[0], segEnd[1], segEnd[0]);
+                  if (segDist >= screenOffsetMeters) {
+                    const t = screenOffsetMeters / segDist;
+                    aheadPoint = [
+                      proj[0] + (segEnd[0] - proj[0]) * t,
+                      proj[1] + (segEnd[1] - proj[1]) * t
+                    ];
+                  }
+                }
+                
+                cameraCenter = aheadPoint 
+                  ? { latitude: aheadPoint[1], longitude: aheadPoint[0] }
+                  : (predictivePos || userLoc);
+              } else {
+                cameraCenter = userLoc;
+              }
+            }
+            
+            const dynamicPitch = dynamicZoom > 18 ? 55 : 50;
+            
+            (cameraRef.current as any).setCamera({
+              centerCoordinate: [cameraCenter.longitude, cameraCenter.latitude],
+              zoomLevel: dynamicZoom,
+              pitch: dynamicPitch,
+              heading: heading, // This will rotate map in heading-up mode
+              animationMode: 'flyTo',
+              animationDuration: headingChanged ? 400 : 600, // Faster rotation for heading changes
+            });
+            
+            if (headingChanged) {
+              console.log('[NAV] Heading changed, rotating camera:', {
+                prevHeading: prevHeading.toFixed(1) + '°',
+                newHeading: newHeading.toFixed(1) + '°',
+                delta: (newHeading - prevHeading).toFixed(1) + '°'
+              });
+            }
+          }
+        }
+      } else {
+        console.warn('[NAV] ON_ROUTE: normalizedRouteCoordsRef.current is null or empty. Route coordinates:', route?.coordinates?.length || 0);
+      }
+    } catch (e) {
+      console.warn('[NAV] ON_ROUTE update failed:', e);
+    }
+  }
   };
   
   // Simple distance calculation helper
@@ -786,18 +1259,21 @@ const NavigationScreen = () => {
           currentStepIndex: 0,
         }));
 
-        // Fit camera to show entire route briefly, then switch to follow mode
+        // Google Maps-style: fitBounds with padding 80, duration 800, then set followUserLocation = true
         if (cameraRef.current && coordinates.length > 0) {
           setTimeout(() => {
             cameraRef.current?.fitBounds(
               [coordinates[0][0], coordinates[0][1]],
               [coordinates[coordinates.length - 1][0], coordinates[coordinates.length - 1][1]],
-              [50, 100, 50, 100],
-              2000
+              [80, 80, 80, 80], // Google Maps-style padding
+              800 // Google Maps-style duration
             );
+            
+            // Re-enable follow mode after showing route
+            setTimeout(() => {
+              setFollowUserLocation(true);
+            }, 850);
           }, 500);
-
-          // After showing the route, camera will automatically return to follow mode (configured in Camera component)
         }
       } else {
         console.error('[NAV] No route found in Directions API response');
@@ -817,6 +1293,33 @@ const NavigationScreen = () => {
     // Re-enable follow mode to recenter on user location
     console.log('[NAV] Recentering camera on user location');
     setFollowUserLocation(true);
+    isRecenterInProgressRef.current = true; // Mark that we're programmatically recentering
+    try {
+      const loc = navigationState.userLocation;
+      if (cameraRef.current && loc) {
+        // Google Maps-style recenter with easeTo
+        const currentSpeed = navigationState.currentSpeed || 0;
+        const dynamicZoom = calculateDynamicZoom(currentSpeed, navigationState.nextTurnDistance || 0);
+        const dynamicPitch = 35 + ((dynamicZoom - 14) / (19 - 14)) * (45 - 35);
+        
+        (cameraRef.current as any).setCamera({
+          centerCoordinate: [loc.longitude, loc.latitude],
+          zoomLevel: dynamicZoom,
+          pitch: Math.round(dynamicPitch),
+          heading: mapOrientationMode === 'heading-up' ? (navigationState.heading || 0) : 0,
+          animationMode: 'easeTo', // Google Maps-style
+          animationDuration: 300,
+        });
+        // Clear flag after animation completes
+        setTimeout(() => {
+          isRecenterInProgressRef.current = false;
+        }, 650); // Slightly longer than animation duration
+      } else {
+        isRecenterInProgressRef.current = false;
+      }
+    } catch {
+      isRecenterInProgressRef.current = false;
+    }
   };
 
   const getTurnIcon = (turnType: string) => {
@@ -842,10 +1345,94 @@ const NavigationScreen = () => {
     return iconMap[pointType] || 'location';
   };
 
+  // Helper to get vibrant colors for waypoint cards based on type
+  const getWaypointCardColors = (pointType: string, status: string) => {
+    if (status === 'skipped') {
+      return {
+        cardBg: '#F5F5F5',
+        iconBg: '#E0E0E0',
+        iconColor: '#9CA3AF',
+        borderColor: '#D1D5DB',
+        accentColor: '#9CA3AF',
+      };
+    }
+    if (status === 'completed') {
+      return {
+        cardBg: '#F0FDF4',
+        iconBg: '#D1FAE5',
+        iconColor: '#059669',
+        borderColor: '#86EFAC',
+        accentColor: '#10B981',
+      };
+    }
+    
+    // Vibrant colors based on point type
+    const colorMap: { [key: string]: any } = {
+      'gas_station': {
+        cardBg: '#FFF7ED',
+        iconBg: '#FFEDD5',
+        iconColor: '#F97316',
+        borderColor: '#FDBA74',
+        accentColor: '#EA580C',
+      },
+      'restaurant': {
+        cardBg: '#FEF2F2',
+        iconBg: '#FEE2E2',
+        iconColor: '#EF4444',
+        borderColor: '#FCA5A5',
+        accentColor: '#DC2626',
+      },
+      'coffee_shop': {
+        cardBg: '#F5F3FF',
+        iconBg: '#EDE9FE',
+        iconColor: '#8B5CF6',
+        borderColor: '#C4B5FD',
+        accentColor: '#7C3AED',
+      },
+      'scenic_point': {
+        cardBg: '#ECFDF5',
+        iconBg: '#D1FAE5',
+        iconColor: '#10B981',
+        borderColor: '#86EFAC',
+        accentColor: '#059669',
+      },
+      'rest_area': {
+        cardBg: '#EFF6FF',
+        iconBg: '#DBEAFE',
+        iconColor: '#3B82F6',
+        borderColor: '#93C5FD',
+        accentColor: '#2563EB',
+      },
+      'hotel': {
+        cardBg: '#FDF4FF',
+        iconBg: '#F3E8FF',
+        iconColor: '#A855F7',
+        borderColor: '#C084FC',
+        accentColor: '#9333EA',
+      },
+      'shop': {
+        cardBg: '#FFFBEB',
+        iconBg: '#FEF3C7',
+        iconColor: '#F59E0B',
+        borderColor: '#FCD34D',
+        accentColor: '#D97706',
+      },
+    };
+    
+    return colorMap[pointType] || {
+      cardBg: '#F0F9FF',
+      iconBg: '#E0F2FE',
+      iconColor: '#0EA5E9',
+      borderColor: '#7DD3FC',
+      accentColor: '#0284C7',
+    };
+  };
+
   // Helper to get icon for navigation waypoint type
   const getNavWaypointIcon = (pointType: string): string => {
     // For navigation waypoints, use generic navigation icons based on point type
     const iconMap: { [key: string]: string } = {
+      'nav_mile': 'ellipse-outline', // Distinct icon for mile markers (small circle)
       'turn': 'arrow-forward',
       'straight': 'arrow-up',
       'merge': 'git-merge',
@@ -948,7 +1535,10 @@ const NavigationScreen = () => {
       Alert.alert(
         '✅ At Start Point',
         `You're already at the start of "${route.name}". Beginning route navigation!`,
-        [{ text: 'OK', onPress: () => setNavigationPhase('ON_ROUTE') }]
+        [{ text: 'OK', onPress: () => {
+          setNavigationPhase('ON_ROUTE');
+          setFollowUserLocation(true); // Google Maps-style: always true after route start
+        }}]
       );
     }
     // CASE 2: Too far away (>500km) - show skip option without navigation attempt
@@ -1065,7 +1655,10 @@ const NavigationScreen = () => {
           [
             {
               text: 'Start Route',
-              onPress: () => setNavigationPhase('ON_ROUTE')
+              onPress: () => {
+                setNavigationPhase('ON_ROUTE');
+                setFollowUserLocation(true); // Google Maps-style: always true after route start
+              }
             }
           ]
         );
@@ -1157,6 +1750,375 @@ const NavigationScreen = () => {
       }
     };
   }, [scrollTimeout]);
+
+  // Update current time every second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Calculate dynamic zoom level based on speed and turn distance
+  const calculateDynamicZoom = (speedKmh: number, turnDistanceMeters: number): number => {
+    // Google Maps-style zoom formula: 17 - (speedKmh / 50)
+    // 20 km/h → 16.6, 100 km/h → 15
+    let zoomBase = 17 - (speedKmh / 50);
+    zoomBase = Math.max(15, Math.min(zoomBase, 18));
+    
+    // Turn anticipation - zoom in when approaching turns
+    if (turnDistanceMeters > 0 && turnDistanceMeters < 100) {
+      // Very close to turn - zoom in for precision
+      zoomBase += 0.7;
+    } else if (turnDistanceMeters >= 100 && turnDistanceMeters < 200) {
+      // Approaching turn - slightly zoom in
+      zoomBase += 0.5;
+    }
+    
+    // Clamp zoom between 14-19 (Google Maps range)
+    return Math.max(14, Math.min(19, zoomBase));
+  };
+
+  // Calculate predictive camera position (slightly ahead of user)
+  const calculatePredictivePosition = (
+    userLoc: { latitude: number; longitude: number },
+    heading: number,
+    speedKmh: number
+  ): { latitude: number; longitude: number } | null => {
+    if (!normalizedRouteCoordsRef.current || normalizedRouteCoordsRef.current.length < 2) {
+      return null;
+    }
+    
+    // Google Maps-style ahead distance: min(200, speed × 1.2)
+    const aheadDistance = Math.min(200, speedKmh * 1.2);
+    
+    // Project user position forward along the route
+    const userPoint: [number, number] = [userLoc.longitude, userLoc.latitude];
+    const closest = findClosestPointOnRoute(normalizedRouteCoordsRef.current, userPoint);
+    
+    // Find point ahead along route using aheadDistance
+    const routeCoords = normalizedRouteCoordsRef.current;
+    let distanceAhead = 0;
+    let aheadIndex = closest.segmentIndex;
+    let aheadPoint: [number, number] | null = null;
+    
+    // Start from the projected point
+    const proj = closest.projectedPoint;
+    
+    // Calculate distance from projected point to end of segment
+    const segEnd = routeCoords[closest.segmentIndex + 1];
+    if (segEnd) {
+      const segDist = haversineDistanceMeters(proj[1], proj[0], segEnd[1], segEnd[0]);
+      if (distanceAhead + segDist >= aheadDistance) {
+        // Interpolate within this segment
+        const t = (aheadDistance - distanceAhead) / segDist;
+        aheadPoint = [
+          proj[0] + (segEnd[0] - proj[0]) * t,
+          proj[1] + (segEnd[1] - proj[1]) * t
+        ];
+      } else {
+        distanceAhead += segDist;
+        aheadIndex++;
+      }
+    }
+    
+    // Continue along route if needed
+    if (!aheadPoint) {
+      for (let i = aheadIndex; i < routeCoords.length - 1; i++) {
+        const A = routeCoords[i];
+        const B = routeCoords[i + 1];
+        const segDist = haversineDistanceMeters(A[1], A[0], B[1], B[0]);
+        
+        if (distanceAhead + segDist >= aheadDistance) {
+          const t = (aheadDistance - distanceAhead) / segDist;
+          aheadPoint = [
+            A[0] + (B[0] - A[0]) * t,
+            A[1] + (B[1] - A[1]) * t
+          ];
+          break;
+        }
+        distanceAhead += segDist;
+      }
+    }
+    
+    // Fallback to user location if can't calculate ahead
+    if (!aheadPoint) {
+      return userLoc;
+    }
+    
+    return {
+      latitude: aheadPoint[1],
+      longitude: aheadPoint[0]
+    };
+  };
+
+  // Update camera when orientation mode changes
+  useEffect(() => {
+    if (cameraRef.current && followUserLocation && navigationState.userLocation) {
+      const loc = navigationState.userLocation;
+      const heading = mapOrientationMode === 'heading-up' ? (navigationState.heading || 0) : 0;
+      
+      console.log('[NAV] Orientation mode changed, updating camera:', mapOrientationMode, 'heading:', heading);
+      
+      // Calculate dynamic zoom and pitch (Google Maps-style)
+      const dynamicZoom = calculateDynamicZoom(navigationState.currentSpeed, navigationState.nextTurnDistance);
+      const dynamicPitch = 35 + ((dynamicZoom - 14) / (19 - 14)) * (45 - 35);
+      
+      // Update camera with new orientation
+      (cameraRef.current as any).setCamera({
+        centerCoordinate: [loc.longitude, loc.latitude],
+        zoomLevel: dynamicZoom,
+        pitch: Math.round(dynamicPitch), // Round to nearest 1°
+        heading: heading,
+        animationMode: 'easeTo', // Google Maps-style
+        animationDuration: 300,
+      });
+    }
+  }, [mapOrientationMode, followUserLocation]);
+
+  // Update camera dynamically during navigation (ON_ROUTE)
+  // This continuously updates camera position, zoom, and rotation based on user location
+  useEffect(() => {
+    console.log('[CAMERA] useEffect triggered:', {
+      navigationPhase,
+      followUserLocation,
+      hasCameraRef: !!cameraRef.current,
+      hasUserLocation: !!navigationState.userLocation,
+      hasRouteCoords: !!normalizedRouteCoordsRef.current,
+      mapOrientationMode
+    });
+
+    if (navigationPhase !== 'ON_ROUTE') {
+      console.log('[CAMERA] Not ON_ROUTE, skipping. Phase:', navigationPhase);
+      return;
+    }
+
+    if (!cameraRef.current) {
+      console.warn('[CAMERA] cameraRef.current is null, cannot update camera');
+      return;
+    }
+
+    let isActive = true;
+    let lastUpdateTime = 0;
+    const UPDATE_INTERVAL_MS = 250; // Google Maps-style: 250ms for smooth, responsive updates
+
+    const updateCamera = () => {
+      // Check if we should still update
+      if (!isActive) {
+        return;
+      }
+
+      if (!cameraRef.current) {
+        console.warn('[CAMERA] cameraRef.current is null in updateCamera');
+        return;
+      }
+
+      // During ON_ROUTE navigation, always update camera to follow user movement
+      // (followUserLocation can be false if user manually moved map, but we still want camera updates during navigation)
+
+      // Get fresh state values (not from closure)
+      const currentLocation = navigationState.userLocation;
+      const currentSpeed = navigationState.currentSpeed || 0;
+      const currentTurnDistance = navigationState.nextTurnDistance || 0;
+      const currentHeading = navigationState.heading || 0;
+      const routeCoords = normalizedRouteCoordsRef.current;
+
+      if (!currentLocation) {
+        console.warn('[CAMERA] No user location available');
+        return;
+      }
+
+      if (!routeCoords || routeCoords.length < 2) {
+        console.warn('[CAMERA] No route coordinates available');
+        return;
+      }
+
+      // Calculate dynamic zoom based on speed and turn distance
+      const dynamicZoom = calculateDynamicZoom(currentSpeed, currentTurnDistance);
+      
+      // Determine heading based on orientation mode
+      const heading = mapOrientationMode === 'heading-up' ? currentHeading : 0;
+      
+      // Calculate camera center position
+      let cameraCenter: { latitude: number; longitude: number };
+      
+      if (mapOrientationMode === 'north-up') {
+        // North-up: center user location in middle of screen
+        cameraCenter = { 
+          latitude: currentLocation.latitude, 
+          longitude: currentLocation.longitude 
+        };
+      } else {
+        // Heading-up: position user at bottom-third, route extending upward
+        // Google Maps-style: center = ahead point computed forward along route
+        const userPoint: [number, number] = [currentLocation.longitude, currentLocation.latitude];
+        const closest = findClosestPointOnRoute(routeCoords, userPoint);
+        
+        // Google Maps-style ahead distance: min(200, speed × 1.2)
+        const aheadDistance = Math.min(200, currentSpeed * 1.2);
+        
+        // Find point ahead along route for camera center
+        let aheadPoint: [number, number] | null = null;
+        const proj = closest.projectedPoint;
+        let distanceAhead = 0;
+        
+        if (closest.segmentIndex + 1 < routeCoords.length) {
+          const segEnd = routeCoords[closest.segmentIndex + 1];
+          const segDist = haversineDistanceMeters(proj[1], proj[0], segEnd[1], segEnd[0]);
+          
+          if (segDist >= aheadDistance) {
+            const t = aheadDistance / segDist;
+            aheadPoint = [
+              proj[0] + (segEnd[0] - proj[0]) * t,
+              proj[1] + (segEnd[1] - proj[1]) * t
+            ];
+          } else {
+            distanceAhead = segDist;
+            for (let i = closest.segmentIndex + 1; i < routeCoords.length - 1; i++) {
+              const A = routeCoords[i];
+              const B = routeCoords[i + 1];
+              const segDist = haversineDistanceMeters(A[1], A[0], B[1], B[0]);
+              
+              if (distanceAhead + segDist >= aheadDistance) {
+                const t = (aheadDistance - distanceAhead) / segDist;
+                aheadPoint = [
+                  A[0] + (B[0] - A[0]) * t,
+                  A[1] + (B[1] - A[1]) * t
+                ];
+                break;
+              }
+              distanceAhead += segDist;
+            }
+          }
+        }
+        
+        // Fallback: use predictive position if we can't find ahead point
+        const predictivePos = calculatePredictivePosition(currentLocation, heading, currentSpeed);
+        cameraCenter = aheadPoint 
+          ? { latitude: aheadPoint[1], longitude: aheadPoint[0] }
+          : (predictivePos || currentLocation);
+      }
+      
+      // Google Maps-style dynamic pitch: map(zoomLevel, 14, 19, 35, 45)
+      const dynamicPitch = 35 + ((dynamicZoom - 14) / (19 - 14)) * (45 - 35);
+      
+      // Google Maps-style camera update with easing
+      try {
+        // Determine animation duration: 250-350ms (longer for big jumps)
+        const lastCenter = lastUpdateTime > 0 ? cameraCenter : null;
+        const distanceChange = lastCenter 
+          ? haversineDistanceMeters(
+              lastCenter.latitude, lastCenter.longitude,
+              cameraCenter.latitude, cameraCenter.longitude
+            )
+          : 0;
+        const animationDuration = distanceChange > 100 ? 350 : 300; // 350ms for big jumps, 300ms normal
+        
+        (cameraRef.current as any).setCamera({
+          centerCoordinate: [cameraCenter.longitude, cameraCenter.latitude],
+          zoomLevel: dynamicZoom,
+          pitch: Math.round(dynamicPitch), // Round to nearest 1° to prevent flickers
+          heading: heading,
+          animationMode: 'easeTo', // Google Maps-style: natural, linear movement
+          animationDuration: animationDuration,
+        });
+        
+        lastUpdateTime = Date.now();
+        console.log('[CAMERA] Camera updated successfully:', {
+          center: [cameraCenter.longitude.toFixed(6), cameraCenter.latitude.toFixed(6)],
+          zoom: dynamicZoom.toFixed(2),
+          pitch: dynamicPitch,
+          heading: heading.toFixed(1),
+          mode: mapOrientationMode,
+          speed: currentSpeed.toFixed(1) + ' km/h'
+        });
+      } catch (error) {
+        console.warn('[CAMERA] Camera update failed:', error);
+      }
+    };
+
+    // Initial update
+    console.log('[CAMERA] Setting up camera updates, initial update...');
+    updateCamera();
+
+    // Set up continuous updates
+    console.log('[CAMERA] Starting interval updates every', UPDATE_INTERVAL_MS, 'ms');
+    const intervalId = setInterval(() => {
+      updateCamera();
+    }, UPDATE_INTERVAL_MS);
+
+    return () => {
+      isActive = false;
+      clearInterval(intervalId);
+    };
+  }, [
+    navigationPhase,
+    followUserLocation,
+    mapOrientationMode,
+    routeCoordsReady, // Trigger when route coordinates become available
+    // These dependencies trigger re-evaluation but values are read fresh in updateCamera
+    navigationState.userLocation?.latitude,
+    navigationState.userLocation?.longitude,
+    navigationState.currentSpeed,
+    navigationState.nextTurnDistance,
+    navigationState.heading,
+  ]);
+
+  // Animate major waypoints modal
+  useEffect(() => {
+    if (showMajorWaypointsModal) {
+      // Reset card animations
+      majorPoints.forEach(point => {
+        if (!majorWaypointsCardAnims[point.id]) {
+          majorWaypointsCardAnims[point.id] = new Animated.Value(0);
+        } else {
+          majorWaypointsCardAnims[point.id].setValue(0);
+        }
+      });
+
+      // Animate overlay fade-in and modal slide-up
+      Animated.parallel([
+        Animated.timing(majorWaypointsModalOpacityAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.spring(majorWaypointsModalSlideAnim, {
+          toValue: 0,
+          tension: 65,
+          friction: 11,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Stagger card animations
+      majorPoints.forEach((point, index) => {
+        if (!majorWaypointsCardAnims[point.id]) {
+          majorWaypointsCardAnims[point.id] = new Animated.Value(0);
+        }
+        Animated.timing(majorWaypointsCardAnims[point.id], {
+          toValue: 1,
+          duration: 300,
+          delay: 100 + (index * 50),
+          useNativeDriver: true,
+        }).start();
+      });
+    } else {
+      // Animate modal close
+      Animated.parallel([
+        Animated.timing(majorWaypointsModalOpacityAnim, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+        Animated.timing(majorWaypointsModalSlideAnim, {
+          toValue: 300,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [showMajorWaypointsModal]);
 
   // Fetch user profile data for avatar
   useEffect(() => {
@@ -1345,15 +2307,56 @@ const NavigationScreen = () => {
   }
 
   // Convert route coordinates to GeoJSON
+  // Use normalized coordinates if available, otherwise use raw route coordinates
+  const routeCoordsForGeoJSON = normalizedRouteCoordsRef.current && normalizedRouteCoordsRef.current.length > 0
+    ? normalizedRouteCoordsRef.current
+    : (route.coordinates.length > 0 
+        ? (route.coordinates as Array<[number, number]>).map(ensureLngLat)
+        : [[0, 0], [0, 0]]);
+  
   const routeGeoJSON: GeoJSON.Feature<GeoJSON.LineString> = {
     type: 'Feature',
     properties: {},
     geometry: {
       type: 'LineString',
-      coordinates: route.coordinates.length > 0 
-        ? route.coordinates 
-        : [[0, 0], [0, 0]], // Fallback coordinates
+      coordinates: routeCoordsForGeoJSON,
     },
+  };
+
+  // Build GeoJSON for major points (no hook to maintain stable hook order)
+  const majorPointsGeoJSON: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: (majorPoints || []).map((p) => ({
+      type: 'Feature',
+      properties: {
+        id: p.id,
+        name: p.name,
+        point_type: p.point_type,
+        status: p.status,
+        isSkipped: skippedWaypointIds.has(p.id) ? 1 : 0, // Add skipped flag for Mapbox expressions
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [p.lon, p.lat],
+      },
+    })) as GeoJSON.Feature<GeoJSON.Point>[],
+  };
+
+  // GeoJSON for generated navigation mile waypoints
+  const navWaypointsGeoJSON: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: (navigationWaypoints || []).map((p) => ({
+      type: 'Feature',
+      properties: {
+        id: p.id,
+        name: p.name,
+        point_type: p.point_type,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [p.lon, p.lat],
+      },
+    })) as GeoJSON.Feature<GeoJSON.Point>[],
   };
 
   return (
@@ -1361,23 +2364,67 @@ const NavigationScreen = () => {
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       
       {/* Mapbox Map - Full Screen */}
+      <View style={styles.mapContainer}>
       <MapboxGL.MapView
         ref={mapRef}
         style={styles.map}
-        styleURL={MapboxGL.StyleURL.Light}
+        styleURL={MapboxGL.StyleURL.Street}
         compassEnabled={true}
         compassViewPosition={3}
         logoEnabled={false}
         attributionEnabled={false}
+        onRegionIsChanging={(e: any) => {
+          // Ignore region changes during programmatic recenter
+          if (isRecenterInProgressRef.current) {
+            return;
+          }
+          // If the user manually pans/zooms/rotates, stop following
+          try {
+            const isUser = e?.properties?.isUserInteraction ?? true;
+            const now = Date.now();
+            if (isUser) lastRegionUserMsRef.current = now;
+            if (isUser && followUserLocation) {
+              // Debounce: only disable follow if interaction sustained
+              if (now - lastRegionUserMsRef.current < 150) return;
+              console.log('[NAV] User interaction detected → disabling follow');
+              setFollowUserLocation(false);
+            }
+          } catch {
+            // Fallback: disable follow on any region change (only if not recentering)
+            if (followUserLocation) setFollowUserLocation(false);
+          }
+        }}
       >
+        {/* Register category icons for major points (simple 3D-like PNGs) */}
+        <MapboxGL.Images
+          images={{
+            // Pin-styled icons (appear 3D-ish and hover from the location)
+            'pin-gas': { uri: 'https://img.icons8.com/color/96/gas-pump--v1.png' },
+            'pin-food': { uri: 'https://img.icons8.com/color/96/restaurant--v1.png' },
+            'pin-coffee': { uri: 'https://img.icons8.com/color/96/cafe--v1.png' },
+            'pin-scenic': { uri: 'https://img.icons8.com/color/96/landscape.png' },
+            'pin-rest': { uri: 'https://img.icons8.com/color/96/bench-press.png' },
+            'pin-hotel': { uri: 'https://img.icons8.com/color/96/hotel-information.png' },
+            'pin-shop': { uri: 'https://img.icons8.com/color/96/shop.png' },
+            'pin-unknown': { uri: 'https://img.icons8.com/color/96/marker.png' },
+            'pin-custom': { uri: 'https://img.icons8.com/color/96/marker.png' },
+
+            // Flat glyph icons to place INSIDE circles (cleaner than pins)
+            'glyph-gas': { uri: 'https://img.icons8.com/fluency/96/gas-station.png' },
+            'glyph-food': { uri: 'https://img.icons8.com/color/96/meal.png' },
+            'glyph-coffee': { uri: 'https://img.icons8.com/color/96/coffee.png' },
+            'glyph-scenic': { uri: 'https://img.icons8.com/fluency/96/trees.png' },
+            'glyph-rest': { uri: 'https://img.icons8.com/color/96/bench.png' },
+            'glyph-hotel': { uri: 'https://img.icons8.com/color/96/hotel-bed.png' },
+            'glyph-shop': { uri: 'https://img.icons8.com/color/96/shopping-bag.png' },
+            'glyph-unknown': { uri: 'https://img.icons8.com/color/96/marker.png' },
+            'glyph-custom': { uri: 'https://img.icons8.com/color/96/marker.png' },
+          }}
+        />
         <MapboxGL.Camera
           ref={cameraRef}
-          followUserLocation={followUserLocation}
-          followUserMode={followUserLocation ? MapboxGL.UserTrackingMode.FollowWithHeading : undefined}
-          followZoomLevel={followUserLocation ? 17 : undefined}
-          followPitch={followUserLocation ? 50 : undefined}
-          animationMode="flyTo"
-          animationDuration={600}
+          // Disable automatic following - we'll control camera manually via setCamera()
+          // This prevents conflicts between automatic following and manual setCamera() calls
         />
 
         {/* Navigation to Start Route - Google Maps Style (TO_START phase only) */}
@@ -1521,7 +2568,10 @@ const NavigationScreen = () => {
             </MapboxGL.ShapeSource>
 
             {/* Main Route Line - Bright Blue */}
-          <MapboxGL.ShapeSource id="routeSource" shape={routeGeoJSON}>
+          <MapboxGL.ShapeSource 
+            id="routeSource" 
+            shape={routeGeoJSON}
+          >
             <MapboxGL.LineLayer
               id="routeLine"
               style={{
@@ -1553,22 +2603,34 @@ const NavigationScreen = () => {
           </>
         )}
 
-        {/* Start Point Marker (only during TO_START phase) */}
-        {navigationPhase === 'TO_START' && route.coordinates.length > 0 && (
-          <MapboxGL.PointAnnotation
-            id="startPoint"
-            coordinate={route.coordinates[0]}
-          >
-            <View style={styles.startPointMarker}>
-              <View style={styles.startPointPin}>
-                <Ionicons name="flag" size={16} color="#FFFFFF" />
-              </View>
-            </View>
-          </MapboxGL.PointAnnotation>
+        {/* Generated Navigation Waypoints (every mile) - only show when toggle is active */}
+        {showMileWaypoints && navigationWaypoints.length > 0 && (
+          <MapboxGL.ShapeSource id="navMileWaypointsSource" shape={navWaypointsGeoJSON}>
+            <MapboxGL.CircleLayer
+              id="navMileWaypointsCircle"
+              aboveLayerID="routeLine"
+              style={{
+                circleRadius: [
+                  'interpolate', ['linear'], ['zoom'],
+                  12, 3.0,
+                  15, 4.0,
+                  17, 5.0,
+                ],
+                circleColor: '#FFFFFF',
+                circleStrokeColor: '#9AA0A6',
+                circleStrokeWidth: 1,
+                circleOpacity: 0.95,
+              }}
+            />
+          </MapboxGL.ShapeSource>
         )}
 
+        {/* Major waypoints moved to bottom to guarantee draw order above routes */}
+
+
+
         {/* Destination Marker */}
-        {route.coordinates.length > 1 && (
+        {route && route.coordinates && route.coordinates.length > 1 && (
           <MapboxGL.PointAnnotation
             id="endPoint"
             coordinate={route.coordinates[route.coordinates.length - 1]}
@@ -1591,9 +2653,147 @@ const NavigationScreen = () => {
           visible={true}
           topImage="user-avatar"
         />
+
+        {/* Destination marker assets */}
+        <MapboxGL.Images
+          images={{
+            'dest-pin': { uri: 'https://img.icons8.com/color/96/marker.png' },
+            'start-pin': { uri: 'https://img.icons8.com/color/96/flag-2.png' },
+          }}
+        />
+
+        {/* Major Waypoints on Route - render last to ensure above polylines */}
+        {majorPointsGeoJSON.features.length > 0 && (
+          <MapboxGL.ShapeSource
+            id="majorPointsSource"
+            shape={majorPointsGeoJSON}
+            onPress={(e) => {
+              const feat = e.features?.[0];
+              if (feat && feat.properties) {
+                const waypointId = feat.properties.id;
+                console.log('[MAP] Major point pressed:', feat.properties);
+                handleWaypointPress(waypointId);
+              }
+            }}
+          >
+            <MapboxGL.CircleLayer
+              id="majorPointsCircle"
+              aboveLayerID="routeLine"
+              style={{
+                circleRadius: [
+                  'interpolate', ['linear'], ['zoom'],
+                  12, 8.5,
+                  15, 11.0,
+                  17, 13.0,
+                ],
+                circleColor: '#FFFFFF',
+                circleStrokeColor: [
+                  'case',
+                  ['==', ['get', 'isSkipped'], 1],
+                  '#9AA0A6', // Gray for skipped waypoints
+                  '#202124', // Default dark color
+                ],
+                circleStrokeWidth: 1.4,
+                circleOpacity: [
+                  'case',
+                  ['==', ['get', 'isSkipped'], 1],
+                  0.6, // Reduced opacity for skipped waypoints
+                  0.95,
+                ],
+              }}
+            />
+            <MapboxGL.SymbolLayer
+              id="majorPointsLayer"
+              aboveLayerID="majorPointsCircle"
+              style={{
+                iconImage: [
+                  'match',
+                  ['get', 'point_type'],
+                  'gas_station', 'glyph-gas',
+                  'restaurant', 'glyph-food',
+                  'coffee_shop', 'glyph-coffee',
+                  'scenic_point', 'glyph-scenic',
+                  'rest_area', 'glyph-rest',
+                  'hotel', 'glyph-hotel',
+                  'shop', 'glyph-shop',
+                  'unknown', 'glyph-unknown',
+                  'glyph-custom',
+                ],
+                iconSize: [
+                  'interpolate', ['linear'], ['zoom'],
+                  12, 0.24,
+                  15, 0.32,
+                  17, 0.40,
+                ],
+                iconAllowOverlap: true,
+                iconIgnorePlacement: true,
+                iconAnchor: 'center',
+                iconOffset: [0, 0],
+                iconPitchAlignment: 'viewport',
+                symbolZOrder: 'source',
+                iconOpacity: [
+                  'case',
+                  ['==', ['get', 'isSkipped'], 1],
+                  0.4, // Reduced opacity for skipped waypoints
+                  1,
+                ],
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* Destination Marker (rendered last to stay on top) */}
+        {route && route.coordinates && route.coordinates.length > 1 && (
+          <MapboxGL.ShapeSource
+            key={`dest-${route.coordinates[route.coordinates.length - 1][0]}-${route.coordinates[route.coordinates.length - 1][1]}`}
+            id="destinationSource"
+            shape={{
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'Point',
+                coordinates: route.coordinates[route.coordinates.length - 1],
+              },
+            }}
+          >
+            <MapboxGL.SymbolLayer
+              id="destinationLayer"
+              aboveLayerID="routeLine"
+              style={{
+                iconImage: 'dest-pin',
+                iconSize: [
+                  'interpolate', ['linear'], ['zoom'],
+                  12, 0.38,
+                  15, 0.48,
+                  17, 0.58,
+                ],
+                iconAnchor: 'bottom',
+                iconAllowOverlap: true,
+                iconIgnorePlacement: true,
+                iconPitchAlignment: 'viewport',
+                symbolZOrder: 'source',
+              }}
+            />
+          </MapboxGL.ShapeSource>
+        )}
+
+        {/* Start Marker (rendered VERY LAST to be above everything - major waypoints, destination, etc.) */}
+        {route && route.coordinates && route.coordinates.length > 0 && (
+          <MapboxGL.PointAnnotation
+            id="startPoint"
+            coordinate={route.coordinates[0]}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <View style={styles.startPointMarker}>
+              <View style={styles.startPointPin}>
+                <Ionicons name="flag" size={20} color="#FFFFFF" />
+              </View>
+            </View>
+          </MapboxGL.PointAnnotation>
+        )}
+
       </MapboxGL.MapView>
-
-
+      </View>
 
       {/* Back Button - Top Left */}
       <SafeAreaView style={styles.backButtonContainer}>
@@ -1619,7 +2819,8 @@ const NavigationScreen = () => {
         </TouchableOpacity>
       </SafeAreaView>
 
-      {/* Google Maps Style - Top Turn Card */}
+      {/* Top Turn Card */}
+      {navigationPhase === 'TO_START' && (
       <SafeAreaView style={styles.topContainer}>
         <View style={styles.topCard}>
           {/* Large Turn Icon */}
@@ -1674,6 +2875,40 @@ const NavigationScreen = () => {
           </View>
         </View>
       </SafeAreaView>
+      )}
+
+      {/* New ON_ROUTE Navigation Card (simple, robust) */}
+      {navigationPhase === 'ON_ROUTE' && (
+        <SafeAreaView style={styles.topContainer}>
+          <View style={styles.onRouteCard}>
+            <View style={styles.onRouteIconBox}>
+              <Ionicons name={getTurnIcon(navigationState.nextTurnType)} size={28} color="#202124" />
+            </View>
+            <View style={styles.onRouteInfo}>
+              <Text style={styles.onRoutePrimary} numberOfLines={1}>
+                {navigationState.nextTurnInstruction || 'Continue straight'}
+              </Text>
+              <View style={styles.onRouteRow}>
+                <Text style={styles.onRouteMeta}>
+                  {navigationState.nextTurnDistance < 1000
+                    ? `${Math.round(navigationState.nextTurnDistance)} m`
+                    : `${(navigationState.nextTurnDistance/1000).toFixed(1)} km`}
+                </Text>
+                <View style={styles.dot} />
+                <Text style={styles.onRouteMeta}>
+                  {Math.max(1, Math.round((navigationState.timeRemaining||0)/60))} min
+                </Text>
+                <View style={styles.dot} />
+                <Text style={styles.onRouteMeta}>
+                  {navigationState.distanceRemaining < 1000
+                    ? `${Math.round(navigationState.distanceRemaining)} m`
+                    : `${(navigationState.distanceRemaining/1000).toFixed(1)} km`}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </SafeAreaView>
+      )}
 
       {/* Error Message Card - When navigation to start fails */}
       {navigationPhase === 'TO_START' && navigationToStartError && (
@@ -1786,7 +3021,7 @@ const NavigationScreen = () => {
                           setShowSkipButton(false);
                           setNavigationToStartError(null);
                           
-                          // Zoom camera to show full route
+                          // Google Maps-style: fitBounds with padding 80, duration 800, then set followUserLocation = true
                           if (cameraRef.current && route && route.coordinates.length > 1) {
                             console.log('[NAV] Zooming to show full route');
                             setTimeout(() => {
@@ -1794,9 +3029,14 @@ const NavigationScreen = () => {
                               cameraRef.current?.fitBounds(
                                 [coords[0][0], coords[0][1]], // Start point
                                 [coords[coords.length - 1][0], coords[coords.length - 1][1]], // End point
-                                [80, 250, 80, 150], // Padding [top, right, bottom, left]
-                                3000 // Animation duration
+                                [80, 80, 80, 80], // Google Maps-style padding
+                                800 // Google Maps-style duration
                               );
+                              
+                              // Re-enable follow mode after showing route
+                              setTimeout(() => {
+                                setFollowUserLocation(true);
+                              }, 850);
                             }, 500);
                           }
                         }
@@ -1820,166 +3060,72 @@ const NavigationScreen = () => {
         </View>
       )}
 
-      {/* Enhanced Progress Card with Real Major Points */}
-      {navigationPhase === 'ON_ROUTE' && (
-        <View style={styles.progressCard}>
-          {/* Show loading state */}
-          {loadingMajorPoints && (
-            <View style={styles.progressLoading}>
-              <ActivityIndicator size="small" color="#4285F4" />
-              <Text style={styles.progressLoadingText}>Loading...</Text>
-            </View>
-          )}
-          
-          {/* Show all waypoints */}
-          {!loadingMajorPoints && majorPoints.length > 0 && (
-            <>
-              {/* Progress Line and Waypoints Side by Side */}
-              <View style={styles.progressAndWaypointsContainer}>
-
-                {/* Scrollable Waypoints with Bike Icon - Right side */}
-              <ScrollView 
-                ref={scrollViewRef}
-                style={styles.waypointsScrollView}
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.waypointsScrollContent}
-                onScroll={handleScroll}
-                scrollEventThrottle={16}
-                onScrollBeginDrag={() => setIsScrolling(true)}
-                onScrollEndDrag={() => {
-                  // Start timeout when user stops dragging
-                  if (scrollTimeout) clearTimeout(scrollTimeout);
-                  const timeout = setTimeout(() => {
-                    snapToCurrentPosition();
-                    setIsScrolling(false);
-                  }, 2000);
-                  setScrollTimeout(timeout);
-                }}
-              >
-                {/* Combine and sort all waypoints by distance */}
-                {(() => {
-                  const allWaypoints = [
-                    ...majorPoints.map(p => ({ ...p, isMajor: true })),
-                    ...navigationWaypoints.map(p => ({ ...p, isMajor: false }))
-                  ].sort((a, b) => b.distance_from_start - a.distance_from_start);
-                  
-                  return allWaypoints.map((point, index) => {
-                    // Calculate bike position based on current progress
-                    const currentPosition = mockCurrentPosition; // 35%
-                    const waypointProgress = (index / (allWaypoints.length - 1)) * 100;
-                    const nextWaypointProgress = ((index + 1) / (allWaypoints.length - 1)) * 100;
-                    
-                    // Show bike if current position is between this waypoint and the next
-                    const shouldShowBike = currentPosition >= waypointProgress && 
-                                          currentPosition < nextWaypointProgress && 
-                                          index < allWaypoints.length - 1;
-                    
-                    // Determine waypoint status based on reversed order
-                    // Points below bike (closer to start) = completed, points above = upcoming
-                    const isCompleted = waypointProgress > currentPosition;
-                    
-                    return (
-                      <View key={point.id}>
-                        <View style={[
-                          styles.waypointSection,
-                          !point.isMajor && styles.navWaypointSection
-                        ]}>
-                          <View style={[
-                            styles.waypointIconContainer,
-                            !point.isMajor && styles.navWaypointIconContainer
-                          ]}>
-                            <Ionicons 
-                              name={point.isMajor 
-                                ? getPointIcon(point.point_type) as any
-                                : getNavWaypointIcon(point.point_type) as any
-                              } 
-                              size={point.isMajor ? 12 : 8} 
-                              color={isCompleted 
-                                ? "#34A853"  // Green for completed
-                                : point.isMajor 
-                                  ? "#5f6368"  // Dark gray for major waypoints
-                                  : "#B0BEC5"  // Light gray for navigation waypoints
-                              } 
-                            />
-            </View>
-            <View style={styles.waypointTextContainer}>
-                            <Text style={[
-                              point.isMajor ? styles.waypointStatusNext : styles.navWaypointStatus,
-                              isCompleted && styles.waypointStatus
-                            ]}>
-                              {isCompleted ? 'Passed' : 
-                               point.isMajor ? 'Next' : 'Nav'}
-              </Text>
-                            <Text style={[
-                              point.isMajor ? styles.waypointName : styles.navWaypointName,
-                              isCompleted && styles.completedWaypointName
-                            ]} numberOfLines={1}>
-                              {point.name}
-                            </Text>
-                            <Text style={[
-                              point.isMajor ? styles.waypointDistance : styles.navWaypointDistance,
-                              isCompleted && styles.completedWaypointDistance
-                            ]}>
-                              {point.distance_from_start.toFixed(1)} km
-                  </Text>
-            </View>
-          </View>
-
-                        {/* User Profile Picture with Time to Next Stop */}
-                        {shouldShowBike && (
-                          <View style={styles.bikeIconContainer}>
-                            <View style={styles.bikeIcon}>
-                              {userProfile?.avatar_url || user?.avatar ? (
-                                <Image 
-                                  source={{ uri: userProfile?.avatar_url || user?.avatar }} 
-                                  style={styles.profilePicture}
-                                  onError={(error) => {
-                                    console.log('[NAVIGATION] Image load error:', error);
-                                    console.log('[NAVIGATION] Failed to load avatar URL:', userProfile?.avatar_url || user?.avatar);
-                                  }}
-                                  onLoad={() => {
-                                    console.log('[NAVIGATION] Successfully loaded avatar:', userProfile?.avatar_url || user?.avatar);
-                                  }}
-                                />
-                              ) : (
-                                <Ionicons name="person" size={16} color="#FF6B35" />
-                              )}
-            </View>
-                            <Text style={styles.bikeIconText}>You are here</Text>
-                            <View style={styles.timeToNextStop}>
-                              <Text style={styles.timeToNextStopLabel}>Next: {mockNextStopName}</Text>
-                              <Text style={styles.timeToNextStopTime}>{mockTimeToNextStop} min</Text>
-          </View>
-            </View>
-                        )}
-            </View>
-                    );
-                  });
-                })()}
-              </ScrollView>
-          </View>
-            </>
-          )}
-          
-          {/* No major points available */}
-          {!loadingMajorPoints && majorPoints.length === 0 && (
-            <View style={styles.noWaypoints}>
-              <Text style={styles.noWaypointsText}>No waypoints</Text>
-            </View>
-          )}
-          
-        </View>
-      )}
 
       {/* Google Maps Style - Bottom Actions */}
       <View style={styles.bottomActionsContainer}>
-        {/* Speed Display - Real GPS Speed */}
-        <View style={styles.speedCard}>
-          <Text style={styles.speedNumber}>{navigationState.currentSpeed}</Text>
-          <Text style={styles.speedUnit}>km/h</Text>
-        </View>
+        {/* Direction Toggle - moved here (swap with speed) */}
+        <TouchableOpacity
+          style={[
+            styles.directionToggleButton,
+            mapOrientationMode === 'heading-up' && styles.directionToggleButtonActive
+          ]}
+          onPress={() => {
+            console.log('[NAV] Toggling orientation mode, current:', mapOrientationMode);
+            const newMode = mapOrientationMode === 'north-up' ? 'heading-up' : 'north-up';
+            setMapOrientationMode(newMode);
+            // Force camera update immediately
+            if (cameraRef.current && navigationState.userLocation) {
+              const loc = navigationState.userLocation;
+              const heading = newMode === 'heading-up' ? (navigationState.heading || 0) : 0;
+              (cameraRef.current as any).setCamera({
+                centerCoordinate: [loc.longitude, loc.latitude],
+                zoomLevel: calculateDynamicZoom(navigationState.currentSpeed || 0, navigationState.nextTurnDistance || 0),
+                pitch: Math.round(35 + ((calculateDynamicZoom(navigationState.currentSpeed || 0, navigationState.nextTurnDistance || 0) - 14) / (19 - 14)) * (45 - 35)),
+                heading,
+                animationMode: 'easeTo',
+                animationDuration: 300,
+              });
+            }
+            if (followUserLocation) {
+              setFollowUserLocation(false);
+              setTimeout(() => setFollowUserLocation(true), 200);
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons 
+            name={mapOrientationMode === 'heading-up' ? 'navigate' : 'compass'} 
+            size={22} 
+            color={mapOrientationMode === 'heading-up' ? '#4285F4' : '#5f6368'} 
+          />
+        </TouchableOpacity>
 
-        {/* Recenter Button */}
+        {/* Toggle 1 mile waypoints */}
+        <TouchableOpacity
+          style={[
+            styles.generateWpsButton,
+            showMileWaypoints && styles.generateWpsButtonActive
+          ]}
+          onPress={handleToggleMileWaypoints}
+          activeOpacity={0.8}
+        >
+          <Ionicons 
+            name={showMileWaypoints ? "flag" : "flag-outline"} 
+            size={18} 
+            color={showMileWaypoints ? "#4285F4" : "#202124"} 
+          />
+          <Text style={[
+            styles.generateWpsText,
+            showMileWaypoints && styles.generateWpsTextActive
+          ]}>
+            {loadingNavigationWaypoints ? '…' : '1 mi'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Manage Waypoints Button removed */}
+
+        {/* Recenter Button - Only show when not following */}
+        {!followUserLocation && (
         <TouchableOpacity
           style={styles.recenterButton}
           onPress={handleRecenter}
@@ -1987,7 +3133,465 @@ const NavigationScreen = () => {
         >
           <Ionicons name="locate" size={24} color="#5f6368" />
         </TouchableOpacity>
+        )}
       </View>
+
+      {/* Waypoint Action Sheet - Centered card design */}
+      {showWaypointActionSheet && selectedWaypoint && (
+        <View style={styles.actionCardOverlay}>
+          <View style={styles.actionCard}>
+            <View style={styles.actionCardHeader}>
+              <View style={styles.actionCardIconContainer}>
+                <Ionicons
+                  name={getPointIcon(selectedWaypoint.point_type) as any}
+                  size={24}
+                  color={skippedWaypointIds.has(selectedWaypoint.id) ? "#9AA0A6" : "#5f6368"}
+                />
+            </View>
+              <View style={styles.actionCardTitleContainer}>
+                <Text style={styles.actionCardTitle} numberOfLines={2}>
+                  {selectedWaypoint.name}
+              </Text>
+                <Text style={styles.actionCardSubtitle}>
+                  {(selectedWaypoint.distance_from_start / 1000).toFixed(1)} km away
+                  </Text>
+            </View>
+              <TouchableOpacity
+                style={styles.actionCardClose}
+                onPress={() => setShowWaypointActionSheet(false)}
+              >
+                <Ionicons name="close" size={20} color="#5f6368" />
+              </TouchableOpacity>
+          </View>
+
+            <TouchableOpacity
+                style={[
+                styles.actionCardButton,
+                skippedWaypointIds.has(selectedWaypoint.id) && styles.actionCardButtonInclude
+              ]}
+              activeOpacity={0.8}
+              onPress={() => {
+                handleToggleSkipWaypoint(selectedWaypoint.id);
+                setShowWaypointActionSheet(false);
+              }}
+            >
+              <Ionicons
+                name={skippedWaypointIds.has(selectedWaypoint.id) ? "checkmark-circle" : "close-circle"}
+                size={22}
+                color={skippedWaypointIds.has(selectedWaypoint.id) ? "#34A853" : "#EA4335"}
+              />
+              <Text style={[
+                styles.actionCardButtonText,
+                skippedWaypointIds.has(selectedWaypoint.id) && styles.actionCardButtonTextInclude
+              ]}>
+                {skippedWaypointIds.has(selectedWaypoint.id) ? 'Include Waypoint' : 'Skip Waypoint'}
+            </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Waypoint Management Modal - Shown when long-pressing route line */}
+      <Modal
+        visible={showWaypointManagementModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowWaypointManagementModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.managementModalContainer}>
+            <View style={styles.managementModalHeader}>
+              <Text style={styles.managementModalTitle}>Manage Waypoints</Text>
+              <TouchableOpacity
+                onPress={() => setShowWaypointManagementModal(false)}
+                style={styles.managementModalCloseButton}
+              >
+                <Ionicons name="close" size={24} color="#5f6368" />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView
+              style={styles.managementModalContent}
+              showsVerticalScrollIndicator={true}
+            >
+              {/* Combine all waypoints */}
+              {(() => {
+                const routeCoords = (route?.coordinates && Array.isArray(route.coordinates) && route.coordinates.length > 1)
+                  ? route.coordinates as Array<[number, number]>
+                  : null;
+                
+                const allWaypoints = [
+                  ...majorPoints.map(p => ({
+                    ...p,
+                    isMajor: true,
+                    distance_from_start: routeCoords
+                      ? calculateDistanceFromRouteStart(p.lat, p.lon, routeCoords)
+                      : p.distance_from_start || 0
+                  })),
+                  ...(showMileWaypoints ? navigationWaypoints.map((p: any) => ({
+                    ...p,
+                    isMajor: false,
+                    point_type: p.point_type || 'nav_mile',
+                    distance_from_start: routeCoords
+                      ? calculateDistanceFromRouteStart(p.lat, p.lon, routeCoords)
+                      : p.distance_from_start || 0
+                  })) : [])
+                ].sort((a, b) => b.distance_from_start - a.distance_from_start);
+                
+                return allWaypoints.map((point: any) => {
+                  const isSkipped = skippedWaypointIds.has(point.id);
+                  const isCompleted = point.status === 'completed';
+                  
+                  return (
+                    <TouchableOpacity
+                      key={point.id}
+                      style={[
+                        styles.managementWaypointItem,
+                        isSkipped && styles.managementWaypointItemSkipped
+                      ]}
+                      onPress={() => handleToggleSkipWaypoint(point.id)}
+                    >
+                      <View style={styles.managementWaypointIconContainer}>
+                        <Ionicons
+                          name={point.isMajor
+                            ? getPointIcon(point.point_type) as any
+                            : getNavWaypointIcon(point.point_type) as any
+                          }
+                          size={20}
+                          color={isSkipped ? "#9AA0A6" : isCompleted ? "#34A853" : point.isMajor ? "#5f6368" : "#B0BEC5"}
+                        />
+                      </View>
+                      <View style={styles.managementWaypointTextContainer}>
+                        <Text
+                          style={[
+                            styles.managementWaypointName,
+                            isSkipped && styles.managementWaypointNameSkipped
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {point.name}
+                        </Text>
+                        <Text style={styles.managementWaypointDistance}>
+                          {(point.distance_from_start / 1000).toFixed(1)} km
+                        </Text>
+                      </View>
+                      <View style={styles.managementWaypointToggleContainer}>
+                        <Ionicons
+                          name={isSkipped ? "checkbox-outline" : "checkbox"}
+                          size={24}
+                          color={isSkipped ? "#9AA0A6" : "#4285F4"}
+                        />
+                  <Text style={[
+                          styles.managementWaypointToggleText,
+                          isSkipped && styles.managementWaypointToggleTextSkipped
+                  ]}>
+                          {isSkipped ? "Skipped" : "Active"}
+                  </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Major Waypoints Modal - Shows all major waypoints as cards */}
+      <Modal
+        visible={showMajorWaypointsModal}
+        transparent
+        animationType="none"
+        onRequestClose={() => setShowMajorWaypointsModal(false)}
+      >
+        <Animated.View 
+          style={[
+            styles.majorWaypointsModalOverlay,
+            {
+              opacity: majorWaypointsModalOpacityAnim,
+            }
+          ]}
+        >
+          <Animated.View 
+            style={[
+              styles.majorWaypointsModalContainer,
+              {
+                transform: [{ translateY: majorWaypointsModalSlideAnim }],
+              }
+            ]}
+          >
+            {/* Header */}
+            <View style={styles.majorWaypointsModalHeader}>
+              <Text style={styles.majorWaypointsModalTitle}>Major Waypoints</Text>
+              <TouchableOpacity
+                onPress={() => setShowMajorWaypointsModal(false)}
+                style={styles.majorWaypointsModalCloseButton}
+              >
+                <Ionicons name="close" size={20} color="#5f6368" />
+              </TouchableOpacity>
+            </View>
+            
+            {/* Waypoints List */}
+            <ScrollView
+              style={styles.majorWaypointsModalContent}
+              showsVerticalScrollIndicator={true}
+            >
+              {majorPoints.length === 0 ? (
+                <View style={styles.majorWaypointsEmptyContainer}>
+                  <Ionicons name="location-outline" size={48} color="#9AA0A6" />
+                  <Text style={styles.majorWaypointsEmptyText}>No major waypoints available</Text>
+                </View>
+              ) : (
+                majorPoints
+                  .sort((a, b) => (a.distance_from_start || 0) - (b.distance_from_start || 0))
+                  .map((point, index) => {
+                    const isSkipped = skippedWaypointIds.has(point.id);
+                    const isCompleted = point.status === 'completed';
+                    const isApproaching = point.status === 'approaching';
+                    
+                    // Initialize animation value if not exists
+                    if (!majorWaypointsCardAnims[point.id]) {
+                      majorWaypointsCardAnims[point.id] = new Animated.Value(0);
+                    }
+                    
+                    const cardOpacity = majorWaypointsCardAnims[point.id] || new Animated.Value(0);
+                    const cardTranslateY = majorWaypointsCardAnims[point.id]?.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [20, 0],
+                    }) || new Animated.Value(0);
+                    
+                    return (
+                      <Animated.View
+                        key={point.id}
+                        style={{
+                          opacity: cardOpacity,
+                          transform: [{ translateY: cardTranslateY }],
+                        }}
+                      >
+                        <TouchableOpacity
+                          style={[
+                            styles.majorWaypointCard,
+                            isSkipped && styles.majorWaypointCardSkipped,
+                            { 
+                              backgroundColor: getWaypointCardColors(point.point_type, point.status).cardBg,
+                              borderColor: getWaypointCardColors(point.point_type, point.status).borderColor,
+                            }
+                          ]}
+                          onPress={() => {
+                            setSelectedWaypoint(point);
+                            setShowMajorWaypointsModal(false);
+                            setShowWaypointActionSheet(true);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                        <View style={styles.majorWaypointCardContent}>
+                          {/* Left Icon */}
+                          <View style={[
+                            styles.majorWaypointIconContainer,
+                            {
+                              backgroundColor: getWaypointCardColors(point.point_type, point.status).iconBg,
+                              borderColor: getWaypointCardColors(point.point_type, point.status).accentColor,
+                            }
+                          ]}>
+                            <Ionicons
+                              name={getPointIcon(point.point_type) as any}
+                              size={30}
+                              color={getWaypointCardColors(point.point_type, point.status).iconColor}
+                            />
+                          </View>
+                          
+                          {/* Main Content */}
+                          <View style={styles.majorWaypointCardMain}>
+                            {/* Title */}
+                            <Text style={[
+                              styles.majorWaypointCardTitle,
+                              isSkipped && styles.majorWaypointCardTitleSkipped,
+                            ]} numberOfLines={1}>
+                              {point.name}
+              </Text>
+                            
+                            {/* Distance and Time Row */}
+                            <View style={styles.majorWaypointCardTimeRow}>
+                              <Text style={styles.majorWaypointCardTimeText}>
+                                ⏰ {(() => {
+                                  // Calculate remaining distance from current position
+                                  let remainingDistanceKm = 0;
+                                  
+                                  if (navigationPhase === 'ON_ROUTE' && navigationState.userLocation) {
+                                    // Calculate distance traveled from start (in meters)
+                                    const totalRouteMeters = totalRouteMetersRef.current || 0;
+                                    const distanceRemainingMeters = navigationState.distanceRemaining || 0;
+                                    const distanceTraveledMeters = Math.max(0, totalRouteMeters - distanceRemainingMeters);
+                                    
+                                    // Waypoint distance from start (in meters)
+                                    const waypointDistanceMeters = (point.distance_from_start || 0) * 1000;
+                                    
+                                    // Remaining distance to waypoint (in meters)
+                                    const remainingDistanceMeters = Math.max(0, waypointDistanceMeters - distanceTraveledMeters);
+                                    remainingDistanceKm = remainingDistanceMeters / 1000;
+                                  } else {
+                                    // For TO_START phase, show distance from start
+                                    remainingDistanceKm = point.distance_from_start || 0;
+                                  }
+                                  
+                                  const distanceMi = remainingDistanceKm * 0.621371;
+                                  const currentSpeedKmh = navigationState.currentSpeed || 30;
+                                  const minSpeed = 5;
+                                  const speedToUse = Math.max(currentSpeedKmh, minSpeed);
+                                  const timeMinutes = remainingDistanceKm > 0 ? Math.round((remainingDistanceKm / speedToUse) * 60) : 0;
+                                  
+                                  if (remainingDistanceKm <= 0) {
+                                    return 'Passed';
+                                  }
+                                  return `${distanceMi.toFixed(1)} mi | ${timeMinutes} min`;
+                                })()}
+                  </Text>
+            </View>
+                            
+                            {/* Distance from Start (for reference) */}
+                            <View style={styles.majorWaypointCardDistanceRow}>
+                              <Text style={styles.majorWaypointCardDistanceText}>
+                                📍 {(() => {
+                                  const distanceKm = point.distance_from_start || 0;
+                                  const distanceMi = distanceKm * 0.621371;
+                                  return `${distanceMi.toFixed(1)} mi from start`;
+                                })()}
+                              </Text>
+            </View>
+                            
+                            {/* Status Text - Only show for skipped/completed */}
+                            {(isSkipped || isCompleted) && (
+                              <Text style={[
+                                styles.majorWaypointCardStatus,
+                                isSkipped && styles.majorWaypointCardStatusSkipped,
+                                isCompleted && styles.majorWaypointCardStatusCompleted,
+                              ]}>
+                                {isSkipped ? 'Skipped' : 'Completed'}
+                              </Text>
+                            )}
+            </View>
+                          
+                          {/* Right Skip Button */}
+                          <TouchableOpacity
+                            style={[
+                              styles.majorWaypointSkipButton,
+                              isSkipped && styles.majorWaypointSkipButtonActive
+                            ]}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleToggleSkipWaypoint(point.id);
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons 
+                              name={isSkipped ? "checkmark-circle" : "close-circle-outline"} 
+                              size={22} 
+                              color={isSkipped ? "#059669" : "#6B7280"} 
+                            />
+                            <Text style={[
+                              styles.majorWaypointSkipButtonText,
+                              isSkipped && styles.majorWaypointSkipButtonTextActive
+                            ]}>
+                              {isSkipped ? 'Unskip' : 'Skip'}
+              </Text>
+                          </TouchableOpacity>
+            </View>
+                        </TouchableOpacity>
+                      </Animated.View>
+                    );
+                  })
+              )}
+            </ScrollView>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
+
+      {/* Direction Toggle Button - Above bottom bar, right side */}
+      {navigationPhase === 'ON_ROUTE' && (
+        <View
+          style={[
+            styles.directionToggleButtonAboveBar,
+          ]}
+        >
+          {/* Speed Display - moved here (swap with direction toggle) */}
+          <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={styles.speedNumber}>{navigationState.currentSpeed}</Text>
+          <Text style={styles.speedUnit}>km/h</Text>
+        </View>
+        </View>
+      )}
+
+      {/* Bottom Navigation Bar - Only show when ON_ROUTE */}
+      {navigationPhase === 'ON_ROUTE' && (
+        <View style={styles.bottomBar}>
+          {/* Search Button */}
+        <TouchableOpacity
+            style={styles.bottomBarButton}
+            onPress={() => {
+              // TODO: Implement search functionality
+              console.log('Search pressed');
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="search" size={24} color="#000" />
+        </TouchableOpacity>
+
+          {/* Time Section */}
+          <View style={styles.timeSection}>
+            <Text style={styles.currentTime}>
+              {currentTime.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: true 
+              })}
+            </Text>
+            {(() => {
+              // Find next upcoming major stop (not completed or skipped)
+              const nextMajorStop = majorPoints
+                .filter(p => p.status === 'upcoming' && !skippedWaypointIds.has(p.id))
+                .sort((a, b) => (a.distance_from_start || 0) - (b.distance_from_start || 0))[0];
+              
+              if (!nextMajorStop) return null;
+              
+              return (
+                <View style={styles.nextStopInfo}>
+                  <Text style={styles.nextStopText}>
+                    {(() => {
+                      // Calculate time based on distance and current speed
+                      const distanceKm = nextMajorStop.distance_from_start || 0;
+                      const currentSpeedKmh = navigationState.currentSpeed || 30; // Default 30 km/h if no speed
+                      const minSpeed = 5; // Minimum speed for calculation
+                      const speedToUse = Math.max(currentSpeedKmh, minSpeed);
+                      
+                      if (distanceKm <= 0) return '—';
+                      
+                      // Calculate time in minutes
+                      const timeMinutes = Math.round((distanceKm / speedToUse) * 60);
+                      
+                      if (timeMinutes < 60) return `${timeMinutes}m`;
+                      const hours = Math.floor(timeMinutes / 60);
+                      const mins = timeMinutes % 60;
+                      return `${hours}h ${mins}m`;
+                    })()}
+                  </Text>
+                  <Text style={styles.nextStopDistance}>
+                    {nextMajorStop.distance_from_start ? `${(nextMajorStop.distance_from_start / 1000).toFixed(1)} km` : '—'}
+                  </Text>
+      </View>
+              );
+            })()}
+        </View>
+
+          {/* Directions Button (Y-shaped navigation icon) */}
+        <TouchableOpacity
+            style={styles.bottomBarButton}
+            onPress={() => setShowMajorWaypointsModal(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="git-branch" size={24} color="#000" />
+        </TouchableOpacity>
+      </View>
+      )}
     </View>
   );
 };
@@ -1997,8 +3601,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
+  mapContainer: {
+    flex: 1,
+    position: 'relative',
+  },
   map: {
     flex: 1,
+  },
+  longPressOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+    zIndex: 0, // Below all other elements but can detect gestures
   },
   loadingContainer: {
     flex: 1,
@@ -2139,10 +3756,53 @@ const styles = StyleSheet.create({
     marginHorizontal: 6,
   },
 
+  // New ON_ROUTE card styles
+  onRouteCard: {
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 12,
+    marginTop: 68,
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  onRouteIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  onRouteInfo: {
+    flex: 1,
+  },
+  onRoutePrimary: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+  },
+  onRouteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  onRouteMeta: {
+    fontSize: 13,
+    color: '#5f6368',
+  },
+
   // Bottom Actions (Google Style)
   bottomActionsContainer: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 80, // Moved up from 40 to 60
     right: 16,
     alignItems: 'flex-end',
     gap: 12,
@@ -2157,23 +3817,81 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
     elevation: 4,
     minWidth: 65,
   },
   speedNumber: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#202124',
-    lineHeight: 24,
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    lineHeight: 30,
+    letterSpacing: -0.5,
   },
   speedUnit: {
-    fontSize: 11,
-    fontWeight: '400',
-    color: '#5f6368',
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#6B7280',
     marginTop: 1,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  
+  // Manage Waypoints Button
+  manageWaypointsButton: {
+    backgroundColor: '#FFFFFF',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    marginHorizontal: 6,
+  },
+  
+  // Direction Toggle Button (in bottom actions)
+  directionToggleButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  // Direction Toggle Button (above bottom bar) - Now used for Speed Display
+  directionToggleButtonAboveBar: {
+    position: 'absolute',
+    bottom: 117, // Above the bottom bar (bar height ~80px + padding)
+    left: 16,
+    minWidth: 70,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    zIndex: 10,
+  },
+  directionToggleButtonActive: {
+    backgroundColor: '#E8F0FE',
+    borderColor: '#4285F4',
   },
   
   // Recenter Button
@@ -2189,6 +3907,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 6,
     elevation: 4,
+  },
+
+  // Generate waypoints button
+  generateWpsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  generateWpsText: {
+    fontSize: 13,
+    color: '#202124',
+    fontWeight: '600',
+  },
+  generateWpsButtonActive: {
+    backgroundColor: '#E8F0FE',
+    borderWidth: 1,
+    borderColor: '#4285F4',
+  },
+  generateWpsTextActive: {
+    color: '#4285F4',
   },
 
   // Redesigned Progress Card - Left Side (Compact with Scroll)
@@ -2226,6 +3973,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   
+  waypointSectionSkipped: {
+    opacity: 0.6,
+  },
+  waypointIconContainerSkipped: {
+    backgroundColor: '#F5F5F5',
+  },
+  waypointStatusSkipped: {
+    color: '#9AA0A6',
+  },
+  waypointNameSkipped: {
+    color: '#9AA0A6',
+    textDecorationLine: 'line-through',
+  },
+  waypointDistanceSkipped: {
+    color: '#9AA0A6',
+  },
   waypointStatus: {
     fontSize: 7,
     fontWeight: '500',
@@ -2455,25 +4218,25 @@ const styles = StyleSheet.create({
 
   // Start Point Marker (Orange Flag)
   startPointMarker: {
-    width: 36,
-    height: 48,
+    width: 48,
+    height: 64,
     alignItems: 'center',
     justifyContent: 'center',
   },
   startPointPin: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#FF9500',
-    borderWidth: 4,
+    borderWidth: 5,
     borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 8,
   },
 
   // Destination Marker (Google Red Pin)
@@ -2788,6 +4551,418 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: '#FF0000', // Bright red for visibility
     zIndex: 1000,
+  },
+  
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  
+  // Action Card - Centered card design
+  actionCardOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    zIndex: 1000,
+  },
+  actionCard: {
+    width: '85%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  actionCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+  },
+  actionCardIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  actionCardTitleContainer: {
+    flex: 1,
+    marginRight: 8,
+  },
+  actionCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 4,
+    lineHeight: 22,
+  },
+  actionCardSubtitle: {
+    fontSize: 13,
+    color: '#9AA0A6',
+  },
+  actionCardClose: {
+    padding: 4,
+    marginTop: -4,
+  },
+  actionCardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEE5E5',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 10,
+  },
+  actionCardButtonInclude: {
+    backgroundColor: '#E6F7ED',
+  },
+  actionCardButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#EA4335',
+  },
+  actionCardButtonTextInclude: {
+    color: '#34A853',
+  },
+  
+  // Management Modal styles
+  managementModalContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  managementModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8EAED',
+  },
+  managementModalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#202124',
+  },
+  managementModalCloseButton: {
+    padding: 4,
+  },
+  managementModalContent: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  managementWaypointItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F5F5',
+  },
+  managementWaypointItemSkipped: {
+    opacity: 0.6,
+  },
+  managementWaypointIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  managementWaypointTextContainer: {
+    flex: 1,
+    marginRight: 12,
+  },
+  managementWaypointName: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#202124',
+    marginBottom: 4,
+  },
+  managementWaypointNameSkipped: {
+    textDecorationLine: 'line-through',
+    color: '#9AA0A6',
+  },
+  managementWaypointDistance: {
+    fontSize: 14,
+    color: '#9AA0A6',
+  },
+  managementWaypointToggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  managementWaypointToggleText: {
+    fontSize: 14,
+    color: '#4285F4',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  managementWaypointToggleTextSkipped: {
+    color: '#9AA0A6',
+  },
+  // Bottom Navigation Bar
+  bottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    paddingBottom: 34, // Extra padding for safe area
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  bottomBarButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F9FAFB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  timeSection: {
+    flex: 1,
+    alignItems: 'center',
+    marginHorizontal: 16,
+  },
+  currentTime: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#000',
+    letterSpacing: 0.5,
+  },
+  nextStopInfo: {
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  nextStopText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  nextStopDistance: {
+    fontSize: 11,
+    fontWeight: '400',
+    color: '#9CA3AF',
+  },
+  // Major Waypoints Modal
+  majorWaypointsModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  majorWaypointsModalContainer: {
+    backgroundColor: 'transparent',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '80%',
+  },
+  majorWaypointsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: 'transparent',
+  },
+  majorWaypointsModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  majorWaypointsModalCloseButton: {
+    padding: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  majorWaypointsModalContent: {
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    backgroundColor: 'transparent',
+  },
+  majorWaypointsEmptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    backgroundColor: 'transparent',
+  },
+  majorWaypointsEmptyText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    marginTop: 16,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  // Major Waypoint Card
+  majorWaypointCard: {
+    borderRadius: 24,
+    marginBottom: 14,
+    marginHorizontal: 0,
+    borderWidth: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  majorWaypointCardSkipped: {
+    opacity: 0.6,
+  },
+  majorWaypointCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+  },
+  majorWaypointIconContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 18,
+    borderWidth: 2.5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  majorWaypointIconContainerSkipped: {
+    backgroundColor: '#F0F0F0',
+    borderColor: '#E5E5E5',
+  },
+  majorWaypointIconContainerCompleted: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#D1FAE5',
+  },
+  majorWaypointIconContainerApproaching: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FEF3C7',
+  },
+  majorWaypointCardMain: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  majorWaypointCardTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1F2937',
+    marginBottom: 10,
+    letterSpacing: -0.4,
+    lineHeight: 24,
+  },
+  majorWaypointCardTitleSkipped: {
+    textDecorationLine: 'line-through',
+    color: '#9CA3AF',
+  },
+  majorWaypointCardTimeRow: {
+    marginBottom: 4,
+  },
+  majorWaypointCardTimeText: {
+    fontSize: 15,
+    color: '#1F2937',
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  majorWaypointCardDistanceRow: {
+    marginBottom: 8,
+  },
+  majorWaypointCardDistanceText: {
+    fontSize: 13,
+    color: '#4B5563',
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  majorWaypointCardStatus: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginTop: 4,
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  majorWaypointCardStatusSkipped: {
+    color: '#6B7280',
+    backgroundColor: '#E5E7EB',
+  },
+  majorWaypointCardStatusCompleted: {
+    color: '#047857',
+    backgroundColor: '#A7F3D0',
+  },
+  majorWaypointSkipButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginLeft: 4,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  majorWaypointSkipButtonActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#10B981',
+  },
+  majorWaypointSkipButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    letterSpacing: 0.1,
+  },
+  majorWaypointSkipButtonTextActive: {
+    color: '#059669',
   },
 });
 

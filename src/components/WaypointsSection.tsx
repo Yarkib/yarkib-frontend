@@ -1,15 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Animated,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { theme } from '../theme';
 import { StartTimeSettings, Waypoint } from '../types/waypoint';
@@ -37,6 +37,7 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
   const [timeInput, setTimeInput] = useState(customTime);
   const [loadingWaypoints, setLoadingWaypoints] = useState(false);
   const [waypointsError, setWaypointsError] = useState<string | null>(null);
+  const [skippedWaypointIds, setSkippedWaypointIds] = useState<Set<string>>(new Set());
 
   // Animation values
   const fadeAnim = new Animated.Value(1);
@@ -58,6 +59,9 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
     setTimeInput(customTime);
   }, [customTime]);
 
+  // Define major categories - show all waypoints from these categories
+  const MAJOR_CATEGORIES = ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop', 'unknown'];
+
   const fetchWaypoints = async (showAll = false) => {
     if (!routeId) return;
     
@@ -65,14 +69,9 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
       setLoadingWaypoints(true);
       setWaypointsError(null);
       
-      console.log(`[WAYPOINTS] Fetching ${showAll ? 'all' : 'major'} waypoints for route ${routeId}`);
-      
-      let waypointsData;
-      if (showAll) {
-        waypointsData = await waypointsApi.getAllWaypoints(routeId);
-      } else {
-        waypointsData = await waypointsApi.getMajorWaypoints(routeId);
-      }
+      // Always fetch ALL waypoints from the API
+      console.log(`[WAYPOINTS] Fetching all waypoints for route ${routeId}`);
+      const waypointsData = await waypointsApi.getAllWaypoints(routeId);
       
       // Transform backend data to frontend format
       const transformedWaypoints = waypointsData.map((wp: any) => ({
@@ -86,16 +85,22 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
           longitude: wp.lon,
         },
         address: wp.description,
-        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
+        is_major: MAJOR_CATEGORIES.includes(wp.point_type),
       }));
+
+      // Filter based on toggle: if showAll is false, only show major category waypoints
+      const filteredWaypoints = showAll 
+        ? transformedWaypoints 
+        : transformedWaypoints.filter((wp: Waypoint) => MAJOR_CATEGORIES.includes(wp.category));
+
       // Sort waypoints by distance from start to maintain route order
-      const sortedWaypoints = transformedWaypoints.sort(
-        (a: typeof transformedWaypoints[0], b: typeof transformedWaypoints[0]) =>
+      const sortedWaypoints = filteredWaypoints.sort(
+        (a: typeof filteredWaypoints[0], b: typeof filteredWaypoints[0]) =>
           a.distance_from_start - b.distance_from_start
       );
 
       setDisplayedWaypoints(sortedWaypoints);
-      console.log(`[WAYPOINTS] Loaded ${sortedWaypoints.length} waypoints`);
+      console.log(`[WAYPOINTS] Loaded ${sortedWaypoints.length} waypoints (${showAll ? 'all' : 'major categories only'})`);
       
     } catch (error: any) {
       console.error('[WAYPOINTS] Error fetching waypoints:', error);
@@ -195,7 +200,7 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
           longitude: wp.lon,
         },
         address: wp.description,
-        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop'].includes(wp.point_type),
+        is_major: ['gas_station', 'restaurant', 'coffee_shop', 'hotel', 'shop', 'unknown'].includes(wp.point_type),
       }));
       
       // Sort waypoints by distance from start to maintain route order
@@ -365,6 +370,18 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
     setShowAllWaypoints(!showAllWaypoints);
   };
 
+  const handleToggleSkipWaypoint = (waypointId: string) => {
+    setSkippedWaypointIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(waypointId)) {
+        newSet.delete(waypointId);
+      } else {
+        newSet.add(waypointId);
+      }
+      return newSet;
+    });
+  };
+
 
   return (
     <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
@@ -462,6 +479,8 @@ const WaypointsSection: React.FC<WaypointsSectionProps> = ({
               key={waypoint.id}
               waypoint={waypoint}
               isLast={index === displayedWaypoints.length - 1}
+              isSkipped={skippedWaypointIds.has(waypoint.id)}
+              onToggleSkip={() => handleToggleSkipWaypoint(waypoint.id)}
             />
           ))
         )}

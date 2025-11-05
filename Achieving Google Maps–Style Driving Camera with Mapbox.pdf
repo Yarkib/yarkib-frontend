@@ -1,0 +1,149 @@
+# CAMERA_MOVEMENT_VALUES (Google Maps–like Behavior)
+
+This document describes optimized camera behavior and values for Mapbox navigation that mimic Google Maps’ driving mode.
+
+---
+
+## 1. Global Parameters
+
+| Parameter            | Recommended                       | Purpose                                               |
+| -------------------- | --------------------------------- | ----------------------------------------------------- |
+| `UPDATE_INTERVAL_MS` | **250 ms**                        | Smooth, responsive camera updates.                    |
+| `animationMode`      | **`easeTo`**                      | Natural, linear movement (less abrupt than `flyTo`).  |
+| `animationDuration`  | **250–350 ms**                    | Fast but smooth transitions; longer for big jumps.    |
+| `pitch`              | **40–45°**                        | Matches Google Maps’ realistic driving tilt.          |
+| `screenOffsetMeters` | **200 / zoomFactor**              | Positions car in bottom-third for forward visibility. |
+| `followUserLocation` | **Always true after route start** | Prevents camera resets or drift.                      |
+
+---
+
+## 2. Lifecycle Behavior
+
+### Before Starting (TO_START)
+
+* Default state: navigation preview.
+* Perform `fitBounds` on start/end to show full route.
+* Keep `followUserLocation = true` or re-enable immediately.
+
+**Example:**
+
+```js
+if (navigationPhase === 'TO_START') {
+  cameraRef.fitBounds(routeBounds, { padding: 80, duration: 800 });
+  setFollowUserLocation(true);
+}
+```
+
+---
+
+### When Ride Starts (ON_ROUTE)
+
+* **Update frequency:** every **250 ms**
+* **Animation:** `easeTo()` with **250–350 ms** duration
+* **Data sources:** user location, heading, speed, next turn distance, route geometry
+* **Camera sets:** center, zoom, pitch, heading, animation
+
+#### Orientation Modes
+
+**North-Up**
+
+* `heading = 0`
+* `centerCoordinate = userLocation`
+* Fixed pitch (~40°)
+
+**Heading-Up**
+
+* `heading = userHeading`
+* `center = ahead point` computed forward along route:
+
+  ```js
+  const aheadDistance = Math.min(200, speedKmh * 1.2);
+  const aheadPoint = projectForwardOnRoute(userLocation, routeCoords, aheadDistance);
+  centerCoordinate = aheadPoint || predictiveFallback(speed, heading);
+  ```
+
+---
+
+## 3. Dynamic Zoom & Pitch
+
+**Zoom formula:**
+
+```js
+let zoomBase = 17 - (speedKmh / 50); // 20 km/h → 16.6, 100 km/h → 15
+zoomBase = Math.max(15, Math.min(zoomBase, 18));
+
+if (nextTurnDistance < 200) zoomBase += 0.5;
+if (nextTurnDistance < 100) zoomBase += 0.7;
+zoomLevel = clamp(zoomBase, 14, 19);
+```
+
+**Pitch formula:**
+
+```js
+pitch = map(zoomLevel, 14, 19, 35, 45);
+```
+
+---
+
+## 4. Predictive Fallback
+
+Ensures continuity during GPS loss or poor geometry.
+
+```js
+function predictiveFallback(speedKmh, heading) {
+  const distance = Math.min(100, speedKmh * 1.5);
+  return destinationPoint(userLocation, heading, distance);
+}
+```
+
+---
+
+## 5. Camera Responsiveness Thresholds
+
+| Event                | Threshold | Action                      |
+| -------------------- | --------- | --------------------------- |
+| Heading change       | 3°        | Trigger rotation            |
+| Speed change         | 5 km/h    | Adjust zoom/pitch           |
+| Turn distance change | 30 m      | Adjust anticipation zoom    |
+| GPS loss             | >2 s      | Trigger predictive fallback |
+
+---
+
+## 6. Interaction Handling
+
+* **User pans map:** Pause follow mode but continue background updates.
+* **Recenter button:** Resets `followUserLocation = true` and `easeTo()` current location.
+
+---
+
+## 7. Additional Smoothing Techniques
+
+| Technique           | Implementation                                                | Purpose                              |
+| ------------------- | ------------------------------------------------------------- | ------------------------------------ |
+| **Camera lerp**     | `cameraState = lerp(cameraState, targetState, 0.15)`          | Smooth interpolation between frames. |
+| **Easing function** | `ease: 'easeInOutQuad'`                                       | Natural acceleration/deceleration.   |
+| **Bearing damping** | `bearing = prevBearing + 0.2 * (targetBearing - prevBearing)` | Reduces rotation jitter.             |
+| **Pitch rounding**  | Round to nearest 1°                                           | Prevents small flickers.             |
+| **Turn snap**       | When `nextTurnDistance < 50m`, accelerate rotation            | Emphasizes turn visually.            |
+
+---
+
+## 8. Summary of Tuned Values
+
+| Category            | Parameter                | Value  |
+| ------------------- | ------------------------ | ------ |
+| Update Rate         | `UPDATE_INTERVAL_MS`     | 250 ms |
+| Animation           | `easeTo`, 250–350 ms     |        |
+| Pitch               | 35–45° dynamic           |        |
+| Screen Offset       | 200 m / zoomFactor       |        |
+| Ahead Distance      | min(200, speed × 1.2)    |        |
+| Predictive Fallback | speed × 1.5 m            |        |
+| Heading Threshold   | 3°                       |        |
+| Speed Threshold     | 5 km/h                   |        |
+| Turn Zoom           | +0.5 (200m), +0.7 (100m) |        |
+| Zoom Range          | 14–19                    |        |
+| Zoom Base Formula   | `17 - (speed / 50)`      |        |
+
+---
+
+These updated values and behaviors make the camera movement smooth, predictive, and natural — closely matching Google Maps’ driving navigation experience.
